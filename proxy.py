@@ -349,44 +349,122 @@ async def chat_completions(request: ChatCompletionRequest):
 
 @app.get("/v1/models")
 async def list_models():
-    """Return available models (plan.md section 4.6)"""
-    models = [
-        # Claude 4 models (latest)
-        "claude-opus-4-1-20250805",
-        "claude-opus-4-1",
-        "claude-opus-4-20250514",
-        "claude-opus-4-0",
-        "claude-sonnet-4-20250514",
-        "claude-sonnet-4-0",
+    """Return available models with detailed metadata (plan.md section 4.6)"""
 
-        # Claude 3.7 models
-        "claude-3-7-sonnet-20250219",
-        "claude-3-7-sonnet-latest",
+    # Model metadata with CORRECT context windows and capabilities from Anthropic docs
+    # All modern Claude models support 200k context
+    model_metadata = {
+        # Claude 4 Opus models - 200k context, 32k max output
+        "claude-opus-4-1-20250805": {
+            "context_length": 200000,
+            "max_tokens": 32000,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-opus-4-1": {
+            "context_length": 200000,
+            "max_tokens": 32000,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-opus-4-20250514": {
+            "context_length": 200000,
+            "max_tokens": 32000,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-opus-4-0": {
+            "context_length": 200000,
+            "max_tokens": 32000,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
 
-        # Claude 3.5 models
-        "claude-3-5-sonnet-latest",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
-        "claude-3-5-haiku-latest",
+        # Claude 4 Sonnet models - 200k context (1M in beta), 64k max output
+        "claude-sonnet-4-20250514": {
+            "context_length": 200000,  # 1M available in beta
+            "max_tokens": 64000,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-sonnet-4-0": {
+            "context_length": 200000,  # 1M available in beta
+            "max_tokens": 64000,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
 
-        # Claude 3 models
-        "claude-3-opus-latest",
-        "claude-3-opus-20240229",
-        "claude-3-sonnet-20240229",
-        "claude-3-haiku-20240307"
-    ]
+        # Claude 3.7 models - 200k context, 64k max output (128k with beta header)
+        "claude-3-7-sonnet-20250219": {
+            "context_length": 200000,
+            "max_tokens": 64000,  # 128k with beta header
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-3-7-sonnet-latest": {
+            "context_length": 200000,
+            "max_tokens": 64000,  # 128k with beta header
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+
+        # Claude 3.5 Sonnet models - 200k context, 4096 max output (8192 with beta)
+        "claude-3-5-sonnet-latest": {
+            "context_length": 200000,
+            "max_tokens": 8192,  # Requires beta header for 8192, otherwise 4096
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-3-5-sonnet-20241022": {
+            "context_length": 200000,
+            "max_tokens": 8192,  # Requires beta header for 8192, otherwise 4096
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+
+        # Claude 3.5 Haiku models - 200k context, 8192 max output
+        "claude-3-5-haiku-20241022": {
+            "context_length": 200000,
+            "max_tokens": 8192,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-3-5-haiku-latest": {
+            "context_length": 200000,
+            "max_tokens": 8192,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+
+        # Claude 3 models - 200k context, 4096 max output
+        "claude-3-opus-latest": {
+            "context_length": 200000,
+            "max_tokens": 4096,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-3-opus-20240229": {
+            "context_length": 200000,
+            "max_tokens": 4096,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-3-sonnet-20240229": {
+            "context_length": 200000,
+            "max_tokens": 4096,
+            "capabilities": {"vision": True, "function_calling": True}
+        },
+        "claude-3-haiku-20240307": {
+            "context_length": 200000,
+            "max_tokens": 4096,
+            "capabilities": {"vision": True, "function_calling": True}
+        }
+    }
+
+    # Build the response with enriched model data
+    model_list = []
+    for model_id, metadata in model_metadata.items():
+        model_info = {
+            "id": model_id,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "anthropic",
+            "context_length": metadata["context_length"],
+            "max_tokens": metadata["max_tokens"],
+            "max_output_tokens": metadata["max_tokens"],  # Some clients look for this field
+            "capabilities": metadata["capabilities"]
+        }
+        model_list.append(model_info)
 
     return {
         "object": "list",
-        "data": [
-            {
-                "id": model_id,
-                "object": "model",
-                "created": int(time.time()),
-                "owned_by": "anthropic"
-            }
-            for model_id in models
-        ]
+        "data": model_list
     }
 
 

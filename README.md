@@ -92,26 +92,26 @@ Configure them to use:
 The proxy supports all current Claude models:
 
 ### Claude 4 (Latest Generation)
-- `claude-opus-4-1-20250805` - Latest Opus 4.1 (best for complex tasks)
-- `claude-opus-4-1` - Alias for latest Opus 4.1
-- `claude-sonnet-4-20250514` - Claude Sonnet 4 (excellent coding performance)
-- `claude-sonnet-4-0` - Alias for Claude Sonnet 4
+- `claude-opus-4-1-20250805` - Latest Opus 4.1 (200k context, 32k max output)
+- `claude-opus-4-1` - Alias for latest Opus 4.1 (200k context, 32k max output)
+- `claude-sonnet-4-20250514` - Claude Sonnet 4 (200k context, 64k max output)
+- `claude-sonnet-4-0` - Alias for Claude Sonnet 4 (200k context, 64k max output)
 
 ### Claude 3.7
-- `claude-3-7-sonnet-20250219` - Claude 3.7 Sonnet (hybrid reasoning)
-- `claude-3-7-sonnet-latest` - Alias for latest 3.7 Sonnet (default model)
+- `claude-3-7-sonnet-20250219` - Claude 3.7 Sonnet (200k context, 64k max output)
+- `claude-3-7-sonnet-latest` - Alias for latest 3.7 Sonnet (default model, 200k context, 64k max output)
 
 ### Claude 3.5
-- `claude-3-5-sonnet-latest` - Latest Sonnet 3.5
-- `claude-3-5-sonnet-20241022` - Specific Sonnet 3.5 version
-- `claude-3-5-haiku-20241022` - Fast and efficient Haiku 3.5
-- `claude-3-5-haiku-latest` - Latest Haiku 3.5
+- `claude-3-5-sonnet-latest` - Latest Sonnet 3.5 (200k context, 8k max output with beta)
+- `claude-3-5-sonnet-20241022` - Specific Sonnet 3.5 version (200k context, 8k max output with beta)
+- `claude-3-5-haiku-20241022` - Fast and efficient Haiku 3.5 (200k context, 8k max output)
+- `claude-3-5-haiku-latest` - Latest Haiku 3.5 (200k context, 8k max output)
 
 ### Claude 3
-- `claude-3-opus-latest` - Claude 3 Opus
-- `claude-3-opus-20240229` - Specific Opus 3 version
-- `claude-3-sonnet-20240229` - Claude 3 Sonnet
-- `claude-3-haiku-20240307` - Claude 3 Haiku
+- `claude-3-opus-latest` - Claude 3 Opus (200k context, 4k max output)
+- `claude-3-opus-20240229` - Specific Opus 3 version (200k context, 4k max output)
+- `claude-3-sonnet-20240229` - Claude 3 Sonnet (200k context, 4k max output)
+- `claude-3-haiku-20240307` - Claude 3 Haiku (200k context, 4k max output)
 
 ## Available Endpoints
 
