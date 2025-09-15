@@ -1,30 +1,30 @@
 import os
 from pathlib import Path
+from config_loader import get_config_loader
 
-# Port configuration
-PORT = int(os.getenv("PORT", 8081))
-LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
+# Get the config loader instance
+config = get_config_loader()
 
-# Anthropic API configuration (from plan.md section 2)
-ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
-# Updated beta headers to match OpenCode implementation for OAuth support
-ANTHROPIC_BETA = os.getenv("ANTHROPIC_BETA", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
-API_BASE = os.getenv("API_BASE", "https://api.anthropic.com")
+# Server configuration
+PORT = config.get("PORT", "server.port", 8081)
+LOG_LEVEL = config.get("LOG_LEVEL", "server.log_level", "info")
 
-# OAuth configuration (from plan.md sections 2 and 3)
-# For Claude Pro/Max, authorization goes through claude.ai
-AUTH_BASE_AUTHORIZE = os.getenv("AUTH_BASE_AUTHORIZE", "https://claude.ai")
-# Token exchange always goes through console.anthropic.com
-AUTH_BASE_TOKEN = os.getenv("AUTH_BASE_TOKEN", "https://console.anthropic.com")
-CLIENT_ID = os.getenv("CLIENT_ID", "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
-REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback"
-SCOPES = "org:create_api_key user:profile user:inference"
+# Model configuration
+DEFAULT_MODEL = config.get("DEFAULT_MODEL", "models.default", "claude-sonnet-4-0")
 
-# Token storage (from plan.md section 3.6)
-TOKEN_FILE = os.getenv("TOKEN_FILE", str(Path.home() / ".anthropic-oauth-proxy" / "tokens.json"))
+# Anthropic API configuration
+ANTHROPIC_VERSION = config.get("ANTHROPIC_VERSION", "api.anthropic_version", "2023-06-01")
+ANTHROPIC_BETA = config.get("ANTHROPIC_BETA", "api.anthropic_beta",
+                            "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
+API_BASE = config.get("API_BASE", "api.api_base", "https://api.anthropic.com")
+REQUEST_TIMEOUT = config.get("REQUEST_TIMEOUT", "api.request_timeout", 120.0)
 
-# Model defaults (from plan.md section 7)
-DEFAULT_MODEL = "claude-3-7-sonnet-latest"  # Good balance of performance and cost for coding
+# OAuth configuration
+AUTH_BASE_AUTHORIZE = config.get("AUTH_BASE_AUTHORIZE", "oauth.auth_base_authorize", "https://claude.ai")
+AUTH_BASE_TOKEN = config.get("AUTH_BASE_TOKEN", "oauth.auth_base_token", "https://console.anthropic.com")
+CLIENT_ID = config.get("CLIENT_ID", "oauth.client_id", "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
+REDIRECT_URI = config.get("REDIRECT_URI", "oauth.redirect_uri", "https://console.anthropic.com/oauth/code/callback")
+SCOPES = config.get("SCOPES", "oauth.scopes", "org:create_api_key user:profile user:inference")
 
-# Timeout settings
-REQUEST_TIMEOUT = 120.0
+# Token storage
+TOKEN_FILE = config.get("TOKEN_FILE", "storage.token_file", str(Path.home() / ".anthropic-claude-max-proxy" / "tokens.json"))

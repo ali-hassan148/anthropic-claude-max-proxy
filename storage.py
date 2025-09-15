@@ -86,16 +86,56 @@ class TokenStorage:
         """Get token status without exposing secrets (plan.md section 4.4)"""
         tokens = self.load_tokens()
         if not tokens:
-            return {"status": "missing", "message": "No tokens found"}
+            return {
+                "has_tokens": False,
+                "is_expired": True,
+                "expires_at": None,
+                "time_until_expiry": "No tokens"
+            }
 
         expires_at = tokens.get("expires_at", 0)
         current_time = int(time.time())
 
+        # Convert timestamp to ISO format string for display
+        from datetime import datetime
+        expires_dt = datetime.fromtimestamp(expires_at)
+        expires_str = expires_dt.isoformat()
+
         if current_time >= expires_at:
-            return {"status": "expired", "expires_at": expires_at}
+            time_since = current_time - expires_at
+            hours_since = time_since // 3600
+            mins_since = (time_since % 3600) // 60
+
+            if hours_since > 0:
+                time_str = f"{hours_since}h {mins_since}m ago"
+            else:
+                time_str = f"{mins_since}m ago"
+
+            return {
+                "has_tokens": True,
+                "is_expired": True,
+                "expires_at": expires_str,
+                "time_until_expiry": time_str
+            }
+
+        time_remaining = expires_at - current_time
+        hours = time_remaining // 3600
+        minutes = (time_remaining % 3600) // 60
+
+        if hours > 0:
+            time_str = f"{hours}h {minutes}m"
+        else:
+            time_str = f"{minutes}m"
 
         return {
-            "status": "valid",
-            "expires_at": expires_at,
-            "expires_in_seconds": expires_at - current_time
+            "has_tokens": True,
+            "is_expired": False,
+            "expires_at": expires_str,
+            "time_until_expiry": time_str,
+            "expires_in_seconds": time_remaining
         }
+
+    @property
+    def token_file(self) -> Path:
+        """Get the token file path"""
+        return self.token_path

@@ -3,3 +3,5 @@ uvicorn[standard]==0.32.1
 httpx==0.28.1
 pydantic>=2.11.0,<3.0.0
 python-multipart==0.0.17
+rich>=13.0.0
+prompt_toolkit>=3.0.0

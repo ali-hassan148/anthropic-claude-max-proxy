@@ -3,7 +3,7 @@ import logging
 import time
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 import httpx
 import uvicorn
@@ -21,16 +21,13 @@ logging.basicConfig(level=getattr(logging, LOG_LEVEL.upper()))
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
-app = FastAPI(title="Anthropic OAuth Proxy", version="1.0.0")
+app = FastAPI(title="Anthropic Claude Max Proxy", version="1.0.0")
 
 # Initialize managers
 oauth_manager = OAuthManager()
 token_storage = TokenStorage()
 
 # Request models
-class CodeExchangeRequest(BaseModel):
-    code: str
-
 class ChatCompletionRequest(BaseModel):
     model: Optional[str] = DEFAULT_MODEL
     messages: list
@@ -50,7 +47,7 @@ async def make_anthropic_request(request_data: Dict[str, Any], access_token: str
         "anthropic-version": ANTHROPIC_VERSION,
         "anthropic-beta": ANTHROPIC_BETA,
         "Content-Type": "application/json",
-        "User-Agent": "anthropic-oauth-proxy/1.0"
+        "User-Agent": "anthropic-claude-max-proxy/1.0"
     }
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -71,14 +68,14 @@ async def make_anthropic_request(request_data: Dict[str, Any], access_token: str
         return response
 
 
-async def stream_anthropic_response(request_data: Dict[str, Any], access_token: str, model: str, include_usage: bool = False):
-    """Stream response from Anthropic API"""
+async def stream_anthropic_response(request_data: Dict[str, Any], access_token: str, model: str, include_usage: bool = False, retry_on_401: bool = True):
+    """Stream response from Anthropic API with automatic token refresh"""
     headers = {
         "Authorization": f"Bearer {access_token}",
         "anthropic-version": ANTHROPIC_VERSION,
         "anthropic-beta": ANTHROPIC_BETA,
         "Content-Type": "application/json",
-        "User-Agent": "anthropic-oauth-proxy/1.0"
+        "User-Agent": "anthropic-claude-max-proxy/1.0"
     }
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -88,6 +85,17 @@ async def stream_anthropic_response(request_data: Dict[str, Any], access_token: 
             headers=headers,
             json=request_data
         ) as response:
+            # Handle 401 with automatic refresh for streaming
+            if response.status_code == 401 and retry_on_401:
+                logger.info("Got 401 in stream, attempting token refresh")
+                if await oauth_manager.refresh_tokens():
+                    new_token = token_storage.get_access_token()
+                    if new_token:
+                        # Retry the stream with new token
+                        async for chunk in stream_anthropic_response(request_data, new_token, model, include_usage, retry_on_401=False):
+                            yield chunk
+                        return
+
             if response.status_code != 200:
                 error_text = await response.aread()
                 try:
@@ -116,157 +124,6 @@ async def health_check():
     return {"ok": True}
 
 
-@app.get("/auth/login", response_class=HTMLResponse)
-async def auth_login():
-    """Start OAuth login flow (plan.md section 4.2)"""
-    auth_url = oauth_manager.start_login_flow()
-
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Anthropic OAuth Login</title>
-        <style>
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                max-width: 600px;
-                margin: 50px auto;
-                padding: 20px;
-                background: #f5f5f5;
-            }}
-            .container {{
-                background: white;
-                padding: 30px;
-                border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }}
-            h1 {{
-                color: #333;
-                margin-bottom: 20px;
-            }}
-            .step {{
-                margin: 20px 0;
-                padding: 15px;
-                background: #f8f9fa;
-                border-left: 4px solid #007bff;
-                border-radius: 4px;
-            }}
-            .code-input {{
-                width: 100%;
-                padding: 10px;
-                font-family: monospace;
-                font-size: 14px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                margin: 10px 0;
-            }}
-            .submit-btn {{
-                background: #007bff;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 16px;
-            }}
-            .submit-btn:hover {{
-                background: #0056b3;
-            }}
-            .warning {{
-                background: #fff3cd;
-                border: 1px solid #ffc107;
-                color: #856404;
-                padding: 10px;
-                border-radius: 4px;
-                margin-top: 20px;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🔐 Anthropic OAuth Login</h1>
-
-            <div class="step">
-                <strong>Step 1:</strong> A browser window should have opened. If not,
-                <a href="{auth_url}" target="_blank">click here</a> to open the authorization page.
-            </div>
-
-            <div class="step">
-                <strong>Step 2:</strong> Complete the login process in the browser.
-            </div>
-
-            <div class="step">
-                <strong>Step 3:</strong> After authorization, you'll see a code on the Anthropic page.
-                Copy and paste it below:
-            </div>
-
-            <form id="codeForm">
-                <input type="text"
-                       class="code-input"
-                       id="authCode"
-                       placeholder="Paste your authorization code here..."
-                       required>
-                <button type="submit" class="submit-btn">Submit Code</button>
-            </form>
-
-            <div id="result"></div>
-
-            <div class="warning">
-                <strong>Note:</strong> This proxy uses Anthropic's consumer OAuth flow (Claude Pro/Max).
-                It may stop working if Anthropic changes their policy. Use at your own risk.
-            </div>
-        </div>
-
-        <script>
-            document.getElementById('codeForm').addEventListener('submit', async (e) => {{
-                e.preventDefault();
-                const code = document.getElementById('authCode').value.trim();
-                const resultDiv = document.getElementById('result');
-
-                if (!code) {{
-                    resultDiv.innerHTML = '<p style="color: red;">Please enter a code</p>';
-                    return;
-                }}
-
-                resultDiv.innerHTML = '<p>Exchanging code for tokens...</p>';
-
-                try {{
-                    const response = await fetch('/auth/exchange', {{
-                        method: 'POST',
-                        headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{code: code}})
-                    }});
-
-                    const data = await response.json();
-
-                    if (response.ok) {{
-                        resultDiv.innerHTML = '<p style="color: green;">✅ Authentication successful! You can now use the proxy.</p>';
-                    }} else {{
-                        resultDiv.innerHTML = `<p style="color: red;">❌ Error: ${{data.detail || 'Authentication failed'}}</p>`;
-                    }}
-                }} catch (error) {{
-                    resultDiv.innerHTML = `<p style="color: red;">❌ Error: ${{error.message}}</p>`;
-                }}
-            }});
-        </script>
-    </body>
-    </html>
-    """
-
-    return html_content
-
-
-@app.post("/auth/exchange")
-async def auth_exchange(request: CodeExchangeRequest):
-    """Exchange authorization code for tokens (plan.md section 4.3)"""
-    try:
-        result = await oauth_manager.exchange_code(request.code)
-        return result
-    except Exception as e:
-        logger.error(f"Token exchange failed: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 @app.get("/auth/status")
 async def auth_status():
     """Get token status without exposing secrets (plan.md section 4.4)"""
@@ -278,13 +135,13 @@ async def chat_completions(request: ChatCompletionRequest):
     """OpenAI-compatible chat completions endpoint (plan.md section 4.5)"""
     start_time = time.time()
 
-    # Get valid access token
-    access_token = oauth_manager.get_valid_token()
+    # Get valid access token with automatic refresh
+    access_token = await oauth_manager.get_valid_token_async()
     if not access_token:
         logger.error("No valid token available")
         raise HTTPException(
             status_code=401,
-            detail={"error": {"message": "OAuth expired; visit /auth/login again"}}
+            detail={"error": {"message": "OAuth expired; please authenticate using the CLI"}}
         )
 
     # Translate request to Anthropic format (plan.md section 6.1)
@@ -300,7 +157,18 @@ async def chat_completions(request: ChatCompletionRequest):
             if request.stream_options:
                 include_usage = request.stream_options.get("include_usage", False)
 
-            # Handle streaming response
+            # Handle streaming response with proactive token refresh
+            # Check if token needs refresh before starting stream
+            if token_storage.is_token_expired():
+                logger.info("Token expired, refreshing before streaming")
+                if await oauth_manager.refresh_tokens():
+                    access_token = token_storage.get_access_token()
+                    if not access_token:
+                        raise HTTPException(
+                            status_code=401,
+                            detail={"error": {"message": "Failed to refresh token"}}
+                        )
+
             return StreamingResponse(
                 stream_anthropic_response(anthropic_request, access_token, request.model, include_usage),
                 media_type="text/event-stream"
@@ -468,13 +336,40 @@ async def list_models():
     }
 
 
+class ProxyServer:
+    """Proxy server wrapper for CLI control"""
+
+    def __init__(self):
+        self.server = None
+        self.config = None
+
+    def run(self):
+        """Run the proxy server (blocking)"""
+        logger.info(f"Starting Anthropic Claude Max Proxy on http://127.0.0.1:{PORT}")
+        self.config = uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=PORT,
+            log_level=LOG_LEVEL,
+            access_log=False  # Reduce noise in CLI
+        )
+        self.server = uvicorn.Server(self.config)
+        self.server.run()
+
+    def stop(self):
+        """Stop the proxy server"""
+        if self.server:
+            self.server.should_exit = True
+
+
 if __name__ == "__main__":
-    logger.info(f"Starting Anthropic OAuth Proxy on http://127.0.0.1:{PORT}")
-    logger.info("Visit http://127.0.0.1:{PORT}/auth/login to authenticate")
+    # If run directly, just start the server (for backward compatibility)
+    logger.info(f"Starting CCMax Proxy on http://127.0.0.1:{PORT}")
+    logger.info("Note: Use 'python cli.py' for the interactive CLI interface")
 
     uvicorn.run(
         app,
-        host="127.0.0.1",  # Bind to localhost only (plan.md section 10)
+        host="127.0.0.1",
         port=PORT,
         log_level=LOG_LEVEL
     )
