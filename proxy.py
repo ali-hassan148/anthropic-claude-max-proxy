@@ -39,6 +39,7 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = None
     max_completion_tokens: Optional[int] = None
     stream: Optional[bool] = False
+    stream_options: Optional[Dict[str, Any]] = None
 
 
 # Helper functions
@@ -70,7 +71,7 @@ async def make_anthropic_request(request_data: Dict[str, Any], access_token: str
         return response
 
 
-async def stream_anthropic_response(request_data: Dict[str, Any], access_token: str, model: str):
+async def stream_anthropic_response(request_data: Dict[str, Any], access_token: str, model: str, include_usage: bool = False):
     """Stream response from Anthropic API"""
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -103,7 +104,7 @@ async def stream_anthropic_response(request_data: Dict[str, Any], access_token: 
                     yield line + "\n"
 
             # Translate the stream
-            async for chunk in StreamTranslator.translate_stream(generate(), model):
+            async for chunk in StreamTranslator.translate_stream(generate(), model, include_usage):
                 yield chunk
 
 
@@ -294,9 +295,14 @@ async def chat_completions(request: ChatCompletionRequest):
 
     try:
         if request.stream:
+            # Check if usage should be included in streaming
+            include_usage = False
+            if request.stream_options:
+                include_usage = request.stream_options.get("include_usage", False)
+
             # Handle streaming response
             return StreamingResponse(
-                stream_anthropic_response(anthropic_request, access_token, request.model),
+                stream_anthropic_response(anthropic_request, access_token, request.model, include_usage),
                 media_type="text/event-stream"
             )
         else:

@@ -32,6 +32,7 @@ class RequestTranslator:
             max_tokens = 4096
 
         stream = openai_request.get("stream", False)
+        stream_options = openai_request.get("stream_options", {})
 
         # Build Anthropic request
         anthropic_request = {
@@ -40,7 +41,7 @@ class RequestTranslator:
             "stream": stream
         }
 
-        logger.debug(f"Translated request - model: {model}, max_tokens: {max_tokens}, stream: {stream}")
+        logger.debug(f"Translated request - model: {model}, max_tokens: {max_tokens}, stream: {stream}, stream_options: {stream_options}")
 
         # Add optional parameters
         if temperature is not None:
@@ -129,11 +130,15 @@ class StreamTranslator:
     """Translate Anthropic SSE stream to OpenAI stream (plan.md section 6.3)"""
 
     @staticmethod
-    async def translate_stream(anthropic_stream: AsyncIterator[str], model: str) -> AsyncIterator[str]:
+    async def translate_stream(anthropic_stream: AsyncIterator[str], model: str, include_usage: bool = False) -> AsyncIterator[str]:
         """Convert Anthropic SSE events to OpenAI streaming chunks"""
         chunk_id = f"chatcmpl-stream-{int(time.time()*1000)}"
         created = int(time.time())
         first_chunk_sent = False
+
+        # Track usage data from Anthropic events
+        input_tokens = 0
+        output_tokens = 0
 
         async for line in anthropic_stream:
             if not line.strip():
@@ -150,7 +155,22 @@ class StreamTranslator:
                     event_type = data.get("type")
 
                     # Handle different Anthropic event types (plan.md section 6.3)
-                    if event_type == "content_block_start":
+                    if event_type == "message_start":
+                        # Capture initial usage data
+                        message = data.get("message", {})
+                        usage = message.get("usage", {})
+                        input_tokens = usage.get("input_tokens", 0)
+                        output_tokens = usage.get("output_tokens", 0)
+                        logger.debug(f"Stream message_start - input_tokens: {input_tokens}")
+
+                    elif event_type == "message_delta":
+                        # Update usage data (cumulative)
+                        delta_usage = data.get("usage", {})
+                        if delta_usage:
+                            output_tokens = delta_usage.get("output_tokens", output_tokens)
+                            logger.debug(f"Stream message_delta - output_tokens: {output_tokens}")
+
+                    elif event_type == "content_block_start":
                         # Emit initial chunk with role
                         if not first_chunk_sent:
                             openai_chunk = {
@@ -199,6 +219,24 @@ class StreamTranslator:
                             }]
                         }
                         yield f"data: {json.dumps(openai_chunk)}\n\n"
+
+                        # Emit usage chunk if requested (OpenAI format for stream_options.include_usage)
+                        if include_usage and (input_tokens > 0 or output_tokens > 0):
+                            usage_chunk = {
+                                "id": chunk_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model,
+                                "choices": [],
+                                "usage": {
+                                    "prompt_tokens": input_tokens,
+                                    "completion_tokens": output_tokens,
+                                    "total_tokens": input_tokens + output_tokens
+                                }
+                            }
+                            yield f"data: {json.dumps(usage_chunk)}\n\n"
+                            logger.debug(f"Stream usage emitted - prompt: {input_tokens}, completion: {output_tokens}")
+
                         yield "data: [DONE]\n\n"
                         break
 
