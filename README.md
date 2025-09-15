@@ -2,6 +2,9 @@
 
 OpenAI-compatible proxy for Claude Pro/Max subscriptions using OAuth.
 
+## SUPPORT MY WORK
+<a href="https://buymeacoffee.com/Pimzino" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 ## DISCLAIMER
 
 **FOR EDUCATIONAL PURPOSES ONLY**
