@@ -25,30 +25,35 @@ For official access, use Claude Code or Anthropic's API with console API keys.
 
 ## Quick Start
 
-1. **Install:**
+1. **Virtual Environment Setup (Recommended)**
 ```bash
+python -m venv venv
+```
+
+2. **Install:**
+```bash
+venv/Scripts/Activate.ps1
 pip install -r requirements.txt
 ```
 
-2. **Configure (optional):**
+3. **Configure (optional):**
 ```bash
 cp config.example.json config.json
-# Edit config.json if needed - default model is claude-sonnet-4-0
 ```
 
-3. **Run:**
+4. **Run:**
 ```bash
 python cli.py
 ```
 
-4. **Authenticate:**
+5. **Authenticate:**
 - Select option 2 (Login)
 - Browser opens automatically
 - Complete login at claude.ai
 - Copy the authorization code
 - Paste in terminal
 
-5. **Start proxy:**
+6. **Start proxy:**
 - Select option 1 (Start Proxy Server)
 - Server runs at `http://127.0.0.1:8081`
 
