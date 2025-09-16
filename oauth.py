@@ -201,15 +201,38 @@ class OAuthManager:
         if not self.storage.is_token_expired():
             return self.storage.get_access_token()
 
-        # Try to refresh - only use asyncio.run if not in an event loop
+        # Try to refresh - handle both sync and async contexts
         import asyncio
+        import concurrent.futures
+        import logging
+        logger = logging.getLogger(__name__)
+
         try:
             loop = asyncio.get_running_loop()
-            # We're in an async context, can't use asyncio.run
-            return None
+            # We're in an async context - use run_coroutine_threadsafe
+            logger.info("Detected existing event loop, using threadsafe refresh")
+            future = asyncio.run_coroutine_threadsafe(self.refresh_tokens(), loop)
+            # Wait for the refresh to complete
+            if future.result(timeout=30):  # 30 second timeout
+                return self.storage.get_access_token()
+            else:
+                logger.error("Token refresh failed in threadsafe execution")
+                return None
         except RuntimeError:
             # No event loop running, safe to use asyncio.run
-            if asyncio.run(self.refresh_tokens()):
-                return self.storage.get_access_token()
-
-        return None
+            logger.info("No existing event loop, using asyncio.run for refresh")
+            try:
+                if asyncio.run(self.refresh_tokens()):
+                    return self.storage.get_access_token()
+                else:
+                    logger.error("Token refresh failed in new event loop")
+                    return None
+            except Exception as e:
+                logger.error(f"Token refresh failed with exception: {e}")
+                return None
+        except concurrent.futures.TimeoutError:
+            logger.error("Token refresh timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during token refresh: {e}")
+            return None

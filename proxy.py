@@ -91,9 +91,21 @@ def sanitize_anthropic_request(request_data: Dict[str, Any]) -> Dict[str, Any]:
             logger.debug(f"Removing invalid temperature value: {temp_val} (type: {type(temp_val)})")
             del sanitized['temperature']
 
-    # Handle thinking constraints if thinking is enabled
+    if 'top_k' in sanitized:
+        top_k_val = sanitized['top_k']
+        if top_k_val is None or top_k_val == "" or not isinstance(top_k_val, int):
+            logger.debug(f"Removing invalid top_k value: {top_k_val} (type: {type(top_k_val)})")
+            del sanitized['top_k']
+        elif top_k_val <= 0:
+            logger.debug(f"Removing invalid top_k value (must be positive): {top_k_val}")
+            del sanitized['top_k']
+
+    # Handle thinking parameter - remove if null/None as Anthropic API doesn't accept null values
     thinking = sanitized.get('thinking')
-    if thinking and thinking.get('type') == 'enabled':
+    if thinking is None:
+        logger.debug("Removing null thinking parameter (Anthropic API doesn't accept null values)")
+        sanitized.pop('thinking', None)
+    elif thinking and thinking.get('type') == 'enabled':
         logger.debug("Thinking enabled - applying Anthropic API constraints")
 
         # Apply Anthropic thinking constraints

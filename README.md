@@ -1,6 +1,6 @@
 # Anthropic Claude Max Proxy
 
-OpenAI-compatible proxy for Claude Pro/Max subscriptions using OAuth.
+Pure Anthropic proxy for Claude Pro/Max subscriptions using OAuth.
 
 ## SUPPORT MY WORK
 <a href="https://buymeacoffee.com/Pimzino" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
@@ -62,19 +62,20 @@ python cli.py
 
 ## Client Configuration
 
-Configure your OpenAI-compatible client (Cline, Roo, etc.):
+Configure your Anthropic API client:
 
-- **Base URL:** `http://127.0.0.1:8081/v1`
+- **Base URL:** `http://127.0.0.1:8081`
 - **API Key:** Any non-empty string (e.g., "dummy")
-- **Model:** `claude-sonnet-4-0` (or any available Claude model)
+- **Model:** `claude-sonnet-4-20250514` (or any available Claude model)
+- **Endpoint:** `/v1/messages`
 
 ## Available Models
 
-- `claude-opus-4-1` - Opus 4.1 (200k context, 32k output)
-- `claude-sonnet-4-0` - Sonnet 4 (200k context, 64k output) **[DEFAULT]**
-- `claude-3-7-sonnet-latest` - Sonnet 3.7 (200k context, 64k output)
-- `claude-3-5-sonnet-latest` - Sonnet 3.5 (200k context, 8k output)
-- See proxy output for full model list
+- `claude-sonnet-4-20250514` - Claude 4 Sonnet (latest) **[RECOMMENDED]**
+- `claude-3-5-sonnet-20241022` - Claude 3.5 Sonnet (latest)
+- `claude-3-5-haiku-20241022` - Claude 3.5 Haiku (latest)
+- `claude-3-opus-20240229` - Claude 3 Opus
+- See proxy startup output for complete model list
 
 ## Configuration Priority
 

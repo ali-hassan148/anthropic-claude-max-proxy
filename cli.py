@@ -225,16 +225,28 @@ class AnthropicProxyCLI:
         """Attempt to refresh the access token"""
         console.print("Attempting to refresh token...")
 
+        # Check if we have a refresh token first
+        if not self.storage.get_refresh_token():
+            console.print("[red]No refresh token available - please login first[/red]")
+            console.print("\nPress Enter to continue...")
+            input()
+            return
+
         try:
             success = self.loop.run_until_complete(self.oauth.refresh_tokens())
 
             if success:
                 console.print("[green]Token refreshed successfully![/green]")
+                # Show updated token status
+                auth_status, auth_detail = self.get_auth_status()
+                console.print(f"Status: [{('green' if auth_status == 'VALID' else 'yellow')}]{auth_status}[/] ({auth_detail})")
             else:
                 console.print("[red]Token refresh failed - please login again[/red]")
+                console.print("This usually happens when the refresh token has expired.")
 
         except Exception as e:
-            console.print(f"[red]ERROR:[/red] {e}")
+            console.print(f"[red]ERROR:[/red] Token refresh failed: {e}")
+            console.print("Please try logging in again (option 2)")
 
         console.print("\nPress Enter to continue...")
         input()
