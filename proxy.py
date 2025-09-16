@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from settings import (
-    PORT, LOG_LEVEL, THINKING_FORCE_ENABLED, THINKING_DEFAULT_BUDGET
+    PORT, LOG_LEVEL, THINKING_FORCE_ENABLED, THINKING_DEFAULT_BUDGET, BIND_ADDRESS
 )
 from oauth import OAuthManager
 from storage import TokenStorage
@@ -348,11 +348,12 @@ async def anthropic_messages(request: AnthropicMessageRequest):
 class ProxyServer:
     """Proxy server wrapper for CLI control"""
 
-    def __init__(self, debug: bool = False, debug_sse: bool = False):
+    def __init__(self, debug: bool = False, debug_sse: bool = False, bind_address: str = None):
         self.server = None
         self.config = None
         self.debug = debug
         self.debug_sse = debug_sse
+        self.bind_address = bind_address or BIND_ADDRESS
 
         # Configure debug logging if enabled
         if debug:
@@ -392,10 +393,10 @@ class ProxyServer:
 
     def run(self):
         """Run the proxy server (blocking)"""
-        logger.info(f"Starting Anthropic Claude Max Proxy on http://127.0.0.1:{PORT}")
+        logger.info(f"Starting Anthropic Claude Max Proxy on http://{self.bind_address}:{PORT}")
         self.config = uvicorn.Config(
             app,
-            host="127.0.0.1",
+            host=self.bind_address,
             port=PORT,
             log_level=LOG_LEVEL,
             access_log=False  # Reduce noise in CLI
@@ -411,12 +412,12 @@ class ProxyServer:
 
 if __name__ == "__main__":
     # If run directly, just start the server (for backward compatibility)
-    logger.info(f"Starting Anthropic Claude Max Proxy on http://127.0.0.1:{PORT}")
+    logger.info(f"Starting Anthropic Claude Max Proxy on http://{BIND_ADDRESS}:{PORT}")
     logger.info("Note: Use 'python cli.py' for the interactive CLI interface")
 
     uvicorn.run(
         app,
-        host="127.0.0.1",
+        host=BIND_ADDRESS,
         port=PORT,
         log_level=LOG_LEVEL
     )

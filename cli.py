@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -23,19 +24,23 @@ console = Console()
 
 class AnthropicProxyCLI:
     """Main CLI interface for Anthropic Claude Max Proxy"""
+    
+    MAX_RETRIES = 3  # Maximum number of retry attempts for network errors
 
-    def __init__(self, debug: bool = False, debug_sse: bool = False):
+    def __init__(self, debug: bool = False, debug_sse: bool = False, bind_address: str = None):
         self.storage = TokenStorage()
         self.oauth = OAuthManager()
         self.auth_flow = CLIAuthFlow()
         self.proxy_server = ProxyServer(
             debug=debug,
-            debug_sse=debug_sse
+            debug_sse=debug_sse,
+            bind_address=bind_address
         )
         self.server_thread: Optional[threading.Thread] = None
         self.server_running = False
         self.debug = debug
         self.debug_sse = debug_sse
+        self.bind_address = bind_address or self.proxy_server.bind_address
 
         # Debug mode notification
         if debug:
@@ -87,6 +92,58 @@ class AnthropicProxyCLI:
             return "VALID", f"Expires in {time_str}"
 
         return "UNKNOWN", "Unable to determine status"
+    
+    def check_and_refresh_auth(self) -> tuple[bool, str, str]:
+        """
+        Check authentication status and attempt refresh if needed
+        Returns: (success: bool, status: str, message: str)
+        """
+        # Get the current token status
+        status = self.storage.get_status()
+        
+        # No tokens at all
+        if not status["has_tokens"]:
+            return False, "NO_AUTH", "No authentication tokens found. Please login first (option 2)"
+        
+        # Token is still valid
+        if not status["is_expired"]:
+            return True, "VALID", f"Token valid for: {status['time_until_expiry']}"
+        
+        # Token is expired - check for refresh token
+        refresh_token = self.storage.get_refresh_token()
+        if not refresh_token:
+            return False, "NO_REFRESH", "Token expired and no refresh token available. Please login again (option 2)"
+        
+        # Attempt to refresh the token
+        console.print("[yellow]Token expired, attempting automatic refresh...[/yellow]")
+        
+        try:
+            # Run the async refresh_tokens method using the event loop
+            success = self.loop.run_until_complete(self.oauth.refresh_tokens())
+            
+            if success:
+                # Get updated status after refresh
+                new_status = self.storage.get_status()
+                time_remaining = new_status.get("time_until_expiry", "unknown")
+                return True, "REFRESHED", f"Automatically refreshed expired token. Token valid for: {time_remaining}"
+            else:
+                # Refresh failed but we don't know why (generic failure)
+                return False, "REFRESH_FAILED", "Refresh token invalid or expired. Please login again (option 2)"
+        
+        except httpx.NetworkError:
+            return False, "NETWORK_ERROR", "Network error during token refresh. Check connection and retry"
+        
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                return False, "INVALID_TOKEN", "Refresh token invalid or expired. Please login again (option 2)"
+            elif 500 <= e.response.status_code < 600:
+                return False, "SERVER_ERROR", f"Server error during token refresh (HTTP {e.response.status_code}). Try again later"
+            else:
+                return False, "HTTP_ERROR", f"Token refresh failed (HTTP {e.response.status_code}). Please login (option 2)"
+        
+        except Exception as e:
+            # Unknown error
+            return False, "UNKNOWN_ERROR", f"Token refresh failed: {str(e)}. Please login (option 2)"
 
     def display_menu(self):
         """Display the main menu"""
@@ -103,7 +160,7 @@ class AnthropicProxyCLI:
         console.print(f" Auth Status: [{status_style}]{auth_status}[/{status_style}] ({auth_detail})")
 
         if self.server_running:
-            console.print(" Server Status: [green]RUNNING[/green] at http://127.0.0.1:8081")
+            console.print(f" Server Status: [green]RUNNING[/green] at http://{self.bind_address}:8081")
         else:
             console.print(" Server Status: [dim]STOPPED[/dim]")
 
@@ -143,20 +200,47 @@ class AnthropicProxyCLI:
         console.print("\nPress Enter to continue...")
         input()
 
-    def start_proxy_server(self):
-        """Start the proxy server in a background thread"""
+    def start_proxy_server(self, retry_count: int = 0):
+        """Start the proxy server in a background thread
+        
+        Args:
+            retry_count: Number of retry attempts made so far (used internally)
+        """
         if self.server_running:
             console.print("[yellow]Server is already running[/yellow]")
             return
 
-        # Check authentication first
-        auth_status, _ = self.get_auth_status()
-        if auth_status != "VALID":
-            console.print("[red]ERROR:[/red] Valid authentication required to start server")
-            console.print("Please login first (option 2)")
+        # Check authentication with automatic refresh
+        auth_ok, auth_status, message = self.check_and_refresh_auth()
+        
+        if not auth_ok:
+            console.print(f"[red]ERROR:[/red] {message}")
+            
+            # For network errors, offer retry option
+            if auth_status == "NETWORK_ERROR":
+                if retry_count < self.MAX_RETRIES:
+                    console.print(f"\n[yellow]Retry attempt {retry_count + 1} of {self.MAX_RETRIES}[/yellow]")
+                    console.print("\nWould you like to:")
+                    console.print("1. Retry token refresh")
+                    console.print("2. Return to main menu")
+                    choice = Prompt.ask("Select option", choices=["1", "2"])
+                    
+                    if choice == "1":
+                        # Retry the refresh with incremented counter
+                        self.start_proxy_server(retry_count + 1)
+                        return
+                else:
+                    # Max retries reached
+                    console.print(f"\n[red]Maximum retry attempts ({self.MAX_RETRIES}) reached.[/red]")
+                    console.print("Please check your network connection and try again later.")
+            
             console.print("\nPress Enter to continue...")
             input()
             return
+        
+        # Show success message if token was refreshed
+        if auth_status == "REFRESHED":
+            console.print(f"[green]{message}[/green]")
 
         console.print("Starting proxy server...")
 
@@ -169,8 +253,8 @@ class AnthropicProxyCLI:
             # Wait a moment for server to start
             time.sleep(1)
 
-            console.print("[green][OK][/green] Proxy running at http://127.0.0.1:8081")
-            console.print("\nBase URL: http://127.0.0.1:8081")
+            console.print(f"[green][OK][/green] Proxy running at http://{self.bind_address}:8081")
+            console.print(f"\nBase URL: http://{self.bind_address}:8081")
             console.print("API Key: any-placeholder-string")
             console.print("Endpoint: /v1/messages")
 
@@ -301,13 +385,15 @@ def main():
     parser = argparse.ArgumentParser(description="Anthropic Claude Max Proxy CLI")
     parser.add_argument("--debug", "-d", action="store_true", help="Enable debug logging")
     parser.add_argument("--debug-sse", action="store_true", help="Enable detailed SSE event logging")
+    parser.add_argument("--bind", "-b", default=None, help="Override bind address (default: from config)")
 
     args = parser.parse_args()
 
     try:
         cli = AnthropicProxyCLI(
             debug=args.debug,
-            debug_sse=args.debug_sse
+            debug_sse=args.debug_sse,
+            bind_address=args.bind
         )
         cli.run()
     except KeyboardInterrupt:

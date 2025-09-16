@@ -8,6 +8,7 @@ config = get_config_loader()
 # Server configuration
 PORT = config.get("PORT", "server.port", 8081)
 LOG_LEVEL = config.get("LOG_LEVEL", "server.log_level", "info")
+BIND_ADDRESS = config.get("BIND_ADDRESS", "server.bind_address", "0.0.0.0")
 
 # Model configuration
 DEFAULT_MODEL = config.get("DEFAULT_MODEL", "models.default", "claude-sonnet-4-0")

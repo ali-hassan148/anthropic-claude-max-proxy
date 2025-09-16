@@ -47,6 +47,8 @@ cp config.example.json config.json
 4. **Run:**
 ```bash
 python cli.py
+# Or with custom bind address:
+python cli.py --bind 127.0.0.1
 ```
 
 5. **Authenticate:**
@@ -58,24 +60,20 @@ python cli.py
 
 6. **Start proxy:**
 - Select option 1 (Start Proxy Server)
-- Server runs at `http://127.0.0.1:8081`
+- Server runs at `http://0.0.0.0:8081` (default, listens on all interfaces)
 
 ## Client Configuration
 
 Configure your Anthropic API client:
 
-- **Base URL:** `http://127.0.0.1:8081`
+- **Base URL:** `http://<proxy-host>:8081` (default: `http://0.0.0.0:8081`)
 - **API Key:** Any non-empty string (e.g., "dummy")
 - **Model:** `claude-sonnet-4-20250514` (or any available Claude model)
 - **Endpoint:** `/v1/messages`
 
 ## Available Models
 
-- `claude-sonnet-4-20250514` - Claude 4 Sonnet (latest) **[RECOMMENDED]**
-- `claude-3-5-sonnet-20241022` - Claude 3.5 Sonnet (latest)
-- `claude-3-5-haiku-20241022` - Claude 3.5 Haiku (latest)
-- `claude-3-opus-20240229` - Claude 3 Opus
-- See proxy startup output for complete model list
+- Supports all Anthropic Models that you have access to with your Claude Pro / Max subscription.
 
 ## Configuration Priority
 
