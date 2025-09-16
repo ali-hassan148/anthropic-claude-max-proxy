@@ -1,347 +1,382 @@
+import asyncio
 import json
 import logging
 import time
-from typing import Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
+import uuid
+import re
+from typing import Dict, Any, List, Optional, AsyncIterator, Tuple
+
 import httpx
 import uvicorn
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from settings import (
-    PORT, LOG_LEVEL, API_BASE, ANTHROPIC_VERSION, ANTHROPIC_BETA,
-    DEFAULT_MODEL, REQUEST_TIMEOUT
+    PORT, LOG_LEVEL, THINKING_FORCE_ENABLED, THINKING_DEFAULT_BUDGET
 )
 from oauth import OAuthManager
 from storage import TokenStorage
-from translate import RequestTranslator, ResponseTranslator, StreamTranslator
 
 # Setup logging
 logging.basicConfig(level=getattr(logging, LOG_LEVEL.upper()))
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
-app = FastAPI(title="Anthropic Claude Max Proxy", version="1.0.0")
-
-# Initialize managers
+# Global instances
 oauth_manager = OAuthManager()
 token_storage = TokenStorage()
 
-# Request models
-class ChatCompletionRequest(BaseModel):
-    model: Optional[str] = DEFAULT_MODEL
-    messages: list
+# Create FastAPI app
+app = FastAPI(title="Anthropic Claude Max Proxy", version="1.0.0")
+
+
+# Pydantic models for native Anthropic API
+class ThinkingParameter(BaseModel):
+    type: str = Field(default="enabled")
+    budget_tokens: int = Field(default=16000)
+
+
+class AnthropicMessageRequest(BaseModel):
+    model: str
+    messages: List[Dict[str, Any]]
+    max_tokens: int
     temperature: Optional[float] = None
     top_p: Optional[float] = None
-    max_tokens: Optional[int] = None
-    max_completion_tokens: Optional[int] = None
+    top_k: Optional[int] = None
+    system: Optional[List[Dict[str, Any]]] = None
     stream: Optional[bool] = False
-    stream_options: Optional[Dict[str, Any]] = None
+    thinking: Optional[ThinkingParameter] = None
 
 
-# Helper functions
-async def make_anthropic_request(request_data: Dict[str, Any], access_token: str, retry_on_401: bool = True):
-    """Make a request to Anthropic API with automatic token refresh (plan.md section 5)"""
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "anthropic-version": ANTHROPIC_VERSION,
-        "anthropic-beta": ANTHROPIC_BETA,
-        "Content-Type": "application/json",
-        "User-Agent": "anthropic-claude-max-proxy/1.0"
+# Thinking variant parsing removed - clients send thinking parameters directly
+
+
+def log_request(request_id: str, request_data: Dict[str, Any], endpoint: str):
+    """Log incoming request details"""
+    logger.debug(f"[{request_id}] RAW REQUEST CAPTURE")
+    logger.debug(f"[{request_id}] Endpoint: {endpoint}")
+    logger.debug(f"[{request_id}] Model: {request_data.get('model', 'unknown')}")
+    logger.debug(f"[{request_id}] Stream: {request_data.get('stream', False)}")
+    logger.debug(f"[{request_id}] Max Tokens: {request_data.get('max_tokens', 'unknown')}")
+
+    # Log thinking parameters
+    thinking = request_data.get('thinking')
+    if thinking:
+        logger.debug(f"[{request_id}] THINKING FIELDS DETECTED: {thinking}")
+
+    # Check for alternative thinking fields
+    alt_thinking_fields = ['max_thinking_tokens', 'thinking_enabled', 'thinking_budget']
+    detected_fields = {field: request_data.get(field) for field in alt_thinking_fields if field in request_data}
+    if detected_fields:
+        logger.debug(f"[{request_id}] ALTERNATIVE THINKING FIELDS: {detected_fields}")
+
+
+def sanitize_anthropic_request(request_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize and validate request for Anthropic API"""
+    sanitized = request_data.copy()
+
+    # Universal parameter validation - clean invalid values regardless of thinking mode
+    if 'top_p' in sanitized:
+        top_p_val = sanitized['top_p']
+        if top_p_val is None or top_p_val == "" or not isinstance(top_p_val, (int, float)):
+            logger.debug(f"Removing invalid top_p value: {top_p_val} (type: {type(top_p_val)})")
+            del sanitized['top_p']
+        elif not (0.0 <= top_p_val <= 1.0):
+            logger.debug(f"Removing out-of-range top_p value: {top_p_val}")
+            del sanitized['top_p']
+
+    if 'temperature' in sanitized:
+        temp_val = sanitized['temperature']
+        if temp_val is None or temp_val == "" or not isinstance(temp_val, (int, float)):
+            logger.debug(f"Removing invalid temperature value: {temp_val} (type: {type(temp_val)})")
+            del sanitized['temperature']
+
+    # Handle thinking constraints if thinking is enabled
+    thinking = sanitized.get('thinking')
+    if thinking and thinking.get('type') == 'enabled':
+        logger.debug("Thinking enabled - applying Anthropic API constraints")
+
+        # Apply Anthropic thinking constraints
+        if 'temperature' in sanitized and sanitized['temperature'] is not None and sanitized['temperature'] != 1.0:
+            logger.debug(f"Adjusting temperature from {sanitized['temperature']} to 1.0 (thinking enabled)")
+            sanitized['temperature'] = 1.0
+
+        if 'top_p' in sanitized and sanitized['top_p'] is not None and not (0.95 <= sanitized['top_p'] <= 1.0):
+            adjusted_top_p = max(0.95, min(1.0, sanitized['top_p']))
+            logger.debug(f"Adjusting top_p from {sanitized['top_p']} to {adjusted_top_p} (thinking constraints)")
+            sanitized['top_p'] = adjusted_top_p
+
+        # Remove top_k as it's not allowed with thinking
+        if 'top_k' in sanitized:
+            logger.debug("Removing top_k parameter (not allowed with thinking)")
+            del sanitized['top_k']
+
+    return sanitized
+
+
+def inject_claude_code_system_message(request_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Inject Claude Code system message to bypass authentication detection (matches real Claude Code format)"""
+    modified_request = request_data.copy()
+
+    # The exact spoof message from Claude Code - must be first system message
+    claude_code_spoof_element = {
+        "type": "text",
+        "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "cache_control": {"type": "ephemeral"}
     }
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+    # Claude Code uses array format for system messages
+    if 'system' in modified_request and modified_request['system']:
+        existing_system = modified_request['system']
+
+        # If existing system is already an array, prepend our spoof
+        if isinstance(existing_system, list):
+            modified_request['system'] = [claude_code_spoof_element] + existing_system
+        else:
+            # Convert string system to array format with cache control
+            existing_system_element = {
+                "type": "text",
+                "text": existing_system,
+                "cache_control": {"type": "ephemeral"}
+            }
+            modified_request['system'] = [claude_code_spoof_element, existing_system_element]
+    else:
+        # No existing system message - create array with just the spoof
+        modified_request['system'] = [claude_code_spoof_element]
+
+    logger.debug(f"Injected Claude Code system message array for Anthropic authentication bypass")
+    logger.debug(f"Final system message array length: {len(modified_request.get('system', []))}")
+    return modified_request
+
+
+async def make_anthropic_request(anthropic_request: Dict[str, Any], access_token: str) -> httpx.Response:
+    """Make a request to Anthropic API"""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
         response = await client.post(
-            f"{API_BASE}/v1/messages",
-            headers=headers,
-            json=request_data
+            "https://api.anthropic.com/v1/messages?beta=true",
+            json=anthropic_request,
+            headers={
+                "host": "api.anthropic.com",
+                "Accept": "application/json",
+                "X-Stainless-Retry-Count": "0",
+                "X-Stainless-Timeout": "600",
+                "X-Stainless-Lang": "js",
+                "X-Stainless-Package-Version": "0.60.0",
+                "X-Stainless-OS": "Windows",
+                "X-Stainless-Arch": "x64",
+                "X-Stainless-Runtime": "node",
+                "X-Stainless-Runtime-Version": "v22.19.0",
+                "anthropic-dangerous-direct-browser-access": "true",
+                "anthropic-version": "2023-06-01",
+                "authorization": f"Bearer {access_token}",
+                "x-app": "cli",
+                "User-Agent": "claude-cli/1.0.113 (external, cli)",
+                "content-type": "application/json",
+                "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14",
+                "x-stainless-helper-method": "stream",
+                "accept-language": "*",
+                "sec-fetch-mode": "cors"
+            }
         )
-
-        # Handle 401 with automatic refresh (plan.md section 5.3)
-        if response.status_code == 401 and retry_on_401:
-            logger.info("Got 401, attempting token refresh")
-            if await oauth_manager.refresh_tokens():
-                new_token = token_storage.get_access_token()
-                if new_token:
-                    return await make_anthropic_request(request_data, new_token, retry_on_401=False)
-
         return response
 
 
-async def stream_anthropic_response(request_data: Dict[str, Any], access_token: str, model: str, include_usage: bool = False, retry_on_401: bool = True):
-    """Stream response from Anthropic API with automatic token refresh"""
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "anthropic-version": ANTHROPIC_VERSION,
-        "anthropic-beta": ANTHROPIC_BETA,
-        "Content-Type": "application/json",
-        "User-Agent": "anthropic-claude-max-proxy/1.0"
-    }
-
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+async def stream_anthropic_response(request_id: str, anthropic_request: Dict[str, Any], access_token: str) -> AsyncIterator[str]:
+    """Stream response from Anthropic API"""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
         async with client.stream(
             "POST",
-            f"{API_BASE}/v1/messages",
-            headers=headers,
-            json=request_data
+            "https://api.anthropic.com/v1/messages?beta=true",
+            json=anthropic_request,
+            headers={
+                "host": "api.anthropic.com",
+                "Accept": "application/json",
+                "X-Stainless-Retry-Count": "0",
+                "X-Stainless-Timeout": "600",
+                "X-Stainless-Lang": "js",
+                "X-Stainless-Package-Version": "0.60.0",
+                "X-Stainless-OS": "Windows",
+                "X-Stainless-Arch": "x64",
+                "X-Stainless-Runtime": "node",
+                "X-Stainless-Runtime-Version": "v22.19.0",
+                "anthropic-dangerous-direct-browser-access": "true",
+                "anthropic-version": "2023-06-01",
+                "authorization": f"Bearer {access_token}",
+                "x-app": "cli",
+                "User-Agent": "claude-cli/1.0.113 (external, cli)",
+                "content-type": "application/json",
+                "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14",
+                "x-stainless-helper-method": "stream",
+                "accept-language": "*",
+                "sec-fetch-mode": "cors"
+            }
         ) as response:
-            # Handle 401 with automatic refresh for streaming
-            if response.status_code == 401 and retry_on_401:
-                logger.info("Got 401 in stream, attempting token refresh")
-                if await oauth_manager.refresh_tokens():
-                    new_token = token_storage.get_access_token()
-                    if new_token:
-                        # Retry the stream with new token
-                        async for chunk in stream_anthropic_response(request_data, new_token, model, include_usage, retry_on_401=False):
-                            yield chunk
-                        return
-
             if response.status_code != 200:
                 error_text = await response.aread()
-                try:
-                    error_data = json.loads(error_text.decode())
-                    error_msg = error_data.get("error", {}).get("message", "Unknown error")
-                    if "OAuth token lacks required scopes" in error_msg:
-                        error_msg += " - Please re-authenticate at /auth/login to refresh your OAuth token with proper scopes"
-                    raise HTTPException(status_code=response.status_code, detail={"error": {"message": error_msg}})
-                except json.JSONDecodeError:
-                    raise HTTPException(status_code=response.status_code, detail=error_text.decode())
+                error_msg = f"Anthropic API error {response.status_code}: {error_text.decode()}"
+                logger.error(f"[{request_id}] {error_msg}")
+                raise HTTPException(status_code=response.status_code, detail={"error": {"message": error_msg}})
 
-            async def generate():
-                async for line in response.aiter_lines():
-                    yield line + "\n"
-
-            # Translate the stream
-            async for chunk in StreamTranslator.translate_stream(generate(), model, include_usage):
+            async for chunk in response.aiter_text():
                 yield chunk
 
 
-# Routes (plan.md section 4)
+# Middleware for request logging
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+
+    # Only log API endpoints, not static files
+    if request.url.path.startswith("/v1/"):
+        logger.info(f"{request.method} {request.url.path} - {response.status_code} - {process_time:.3f}s")
+
+    return response
+
 
 @app.get("/healthz")
 async def health_check():
-    """Health check endpoint (plan.md section 4.1)"""
-    return {"ok": True}
+    """Health check endpoint"""
+    return {"status": "ok", "timestamp": time.time()}
 
 
 @app.get("/auth/status")
 async def auth_status():
-    """Get token status without exposing secrets (plan.md section 4.4)"""
+    """Get token status without exposing secrets"""
     return token_storage.get_status()
 
 
-@app.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
-    """OpenAI-compatible chat completions endpoint (plan.md section 4.5)"""
+@app.post("/v1/messages")
+async def anthropic_messages(request: AnthropicMessageRequest):
+    """Native Anthropic messages endpoint"""
+    request_id = str(uuid.uuid4())[:8]
     start_time = time.time()
+
+    logger.info(f"[{request_id}] ===== NEW ANTHROPIC MESSAGES REQUEST =====")
+    log_request(request_id, request.model_dump(), "/v1/messages")
 
     # Get valid access token with automatic refresh
     access_token = await oauth_manager.get_valid_token_async()
     if not access_token:
-        logger.error("No valid token available")
+        logger.error(f"[{request_id}] No valid token available")
         raise HTTPException(
             status_code=401,
             detail={"error": {"message": "OAuth expired; please authenticate using the CLI"}}
         )
 
-    # Translate request to Anthropic format (plan.md section 6.1)
-    anthropic_request = RequestTranslator.openai_to_anthropic(request.model_dump())
+    # Prepare Anthropic request (pass through client parameters directly)
+    anthropic_request = request.model_dump()
 
-    # Log request (plan.md section 9)
-    logger.info(f"POST /v1/chat/completions model={request.model} stream={request.stream}")
+    # Ensure max_tokens is sufficient if thinking is enabled
+    thinking = anthropic_request.get("thinking")
+    if thinking and thinking.get("type") == "enabled":
+        thinking_budget = thinking.get("budget_tokens", 16000)
+        min_response_tokens = 1024
+        required_total = thinking_budget + min_response_tokens
+        if anthropic_request["max_tokens"] < required_total:
+            anthropic_request["max_tokens"] = required_total
+            logger.debug(f"[{request_id}] Increased max_tokens to {required_total} (thinking: {thinking_budget} + response: {min_response_tokens})")
+
+    # Sanitize request for Anthropic API constraints
+    anthropic_request = sanitize_anthropic_request(anthropic_request)
+
+    # Inject Claude Code system message to bypass authentication detection
+    anthropic_request = inject_claude_code_system_message(anthropic_request)
+
+    logger.debug(f"[{request_id}] FINAL ANTHROPIC REQUEST HEADERS: authorization=Bearer *****, anthropic-beta=claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14, User-Agent=Claude-Code/1.0.0")
+    logger.debug(f"[{request_id}] SYSTEM MESSAGE STRUCTURE: {json.dumps(anthropic_request.get('system', []), indent=2)}")
+    logger.debug(f"[{request_id}] FULL REQUEST COMPARISON - Our request structure:")
+    logger.debug(f"[{request_id}] - model: {anthropic_request.get('model')}")
+    logger.debug(f"[{request_id}] - system: {type(anthropic_request.get('system'))} with {len(anthropic_request.get('system', []))} elements")
+    logger.debug(f"[{request_id}] - messages: {len(anthropic_request.get('messages', []))} messages")
+    logger.debug(f"[{request_id}] - stream: {anthropic_request.get('stream')}")
+    logger.debug(f"[{request_id}] - temperature: {anthropic_request.get('temperature')}")
+    logger.debug(f"[{request_id}] FULL REQUEST BODY: {json.dumps(anthropic_request, indent=2)}")
 
     try:
         if request.stream:
-            # Check if usage should be included in streaming
-            include_usage = False
-            if request.stream_options:
-                include_usage = request.stream_options.get("include_usage", False)
-
-            # Handle streaming response with proactive token refresh
-            # Check if token needs refresh before starting stream
-            if token_storage.is_token_expired():
-                logger.info("Token expired, refreshing before streaming")
-                if await oauth_manager.refresh_tokens():
-                    access_token = token_storage.get_access_token()
-                    if not access_token:
-                        raise HTTPException(
-                            status_code=401,
-                            detail={"error": {"message": "Failed to refresh token"}}
-                        )
-
+            # Handle streaming response
+            logger.debug(f"[{request_id}] Initiating streaming request")
             return StreamingResponse(
-                stream_anthropic_response(anthropic_request, access_token, request.model, include_usage),
-                media_type="text/event-stream"
+                stream_anthropic_response(request_id, anthropic_request, access_token),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
             )
         else:
             # Handle non-streaming response
+            logger.debug(f"[{request_id}] Making non-streaming request")
             response = await make_anthropic_request(anthropic_request, access_token)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
-            logger.info(f"Anthropic request completed in {elapsed_ms}ms status={response.status_code}")
+            logger.info(f"[{request_id}] Anthropic request completed in {elapsed_ms}ms status={response.status_code}")
 
-            if response.status_code == 429:
-                # Pass through rate limit (plan.md section 9)
-                raise HTTPException(status_code=429, detail=response.json())
-            elif response.status_code >= 500:
-                # Pass through server errors
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail={"error": response.text, "request_id": response.headers.get("x-request-id")}
-                )
-            elif response.status_code != 200:
-                # Handle other errors
-                error_data = response.json()
-                error_msg = error_data.get("error", {}).get("message", "Unknown error")
+            if response.status_code != 200:
+                error_text = response.text
+                error_msg = f"Anthropic API error {response.status_code}: {error_text}"
+                logger.error(f"[{request_id}] {error_msg}")
+                raise HTTPException(status_code=response.status_code, detail={"error": {"message": error_text}})
 
-                # Check for OAuth-specific errors (plan.md section 3.7)
-                if "credential is only authorized for use with Claude Code" in error_msg:
-                    error_msg += " - Ensure beta header is set and scopes include user:inference"
-                elif "OAuth token lacks required scopes" in error_msg:
-                    error_msg += " - Please re-authenticate at /auth/login to refresh your OAuth token with proper scopes"
-
-                raise HTTPException(status_code=response.status_code, detail={"error": {"message": error_msg}})
-
-            # Translate response to OpenAI format (plan.md section 6.2)
+            # Return Anthropic response as-is (native format)
             anthropic_response = response.json()
-            openai_response = ResponseTranslator.anthropic_to_openai(anthropic_response, request.model)
-
-            return openai_response
+            final_elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.info(f"[{request_id}] ===== ANTHROPIC MESSAGES FINISHED ===== Total time: {final_elapsed_ms}ms")
+            return anthropic_response
 
     except HTTPException:
+        final_elapsed_ms = int((time.time() - start_time) * 1000)
+        logger.error(f"[{request_id}] ===== ANTHROPIC MESSAGES FAILED ===== Total time: {final_elapsed_ms}ms")
         raise
     except Exception as e:
-        logger.error(f"Request failed: {e}")
+        final_elapsed_ms = int((time.time() - start_time) * 1000)
+        logger.error(f"[{request_id}] Request failed after {final_elapsed_ms}ms: {e}")
         raise HTTPException(status_code=500, detail={"error": {"message": str(e)}})
-
-
-@app.get("/v1/models")
-async def list_models():
-    """Return available models with detailed metadata (plan.md section 4.6)"""
-
-    # Model metadata with CORRECT context windows and capabilities from Anthropic docs
-    # All modern Claude models support 200k context
-    model_metadata = {
-        # Claude 4 Opus models - 200k context, 32k max output
-        "claude-opus-4-1-20250805": {
-            "context_length": 200000,
-            "max_tokens": 32000,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-opus-4-1": {
-            "context_length": 200000,
-            "max_tokens": 32000,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-opus-4-20250514": {
-            "context_length": 200000,
-            "max_tokens": 32000,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-opus-4-0": {
-            "context_length": 200000,
-            "max_tokens": 32000,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-
-        # Claude 4 Sonnet models - 200k context (1M in beta), 64k max output
-        "claude-sonnet-4-20250514": {
-            "context_length": 200000,  # 1M available in beta
-            "max_tokens": 64000,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-sonnet-4-0": {
-            "context_length": 200000,  # 1M available in beta
-            "max_tokens": 64000,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-
-        # Claude 3.7 models - 200k context, 64k max output (128k with beta header)
-        "claude-3-7-sonnet-20250219": {
-            "context_length": 200000,
-            "max_tokens": 64000,  # 128k with beta header
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-3-7-sonnet-latest": {
-            "context_length": 200000,
-            "max_tokens": 64000,  # 128k with beta header
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-
-        # Claude 3.5 Sonnet models - 200k context, 4096 max output (8192 with beta)
-        "claude-3-5-sonnet-latest": {
-            "context_length": 200000,
-            "max_tokens": 8192,  # Requires beta header for 8192, otherwise 4096
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-3-5-sonnet-20241022": {
-            "context_length": 200000,
-            "max_tokens": 8192,  # Requires beta header for 8192, otherwise 4096
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-
-        # Claude 3.5 Haiku models - 200k context, 8192 max output
-        "claude-3-5-haiku-20241022": {
-            "context_length": 200000,
-            "max_tokens": 8192,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-3-5-haiku-latest": {
-            "context_length": 200000,
-            "max_tokens": 8192,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-
-        # Claude 3 models - 200k context, 4096 max output
-        "claude-3-opus-latest": {
-            "context_length": 200000,
-            "max_tokens": 4096,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-3-opus-20240229": {
-            "context_length": 200000,
-            "max_tokens": 4096,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-3-sonnet-20240229": {
-            "context_length": 200000,
-            "max_tokens": 4096,
-            "capabilities": {"vision": True, "function_calling": True}
-        },
-        "claude-3-haiku-20240307": {
-            "context_length": 200000,
-            "max_tokens": 4096,
-            "capabilities": {"vision": True, "function_calling": True}
-        }
-    }
-
-    # Build the response with enriched model data
-    model_list = []
-    for model_id, metadata in model_metadata.items():
-        model_info = {
-            "id": model_id,
-            "object": "model",
-            "created": int(time.time()),
-            "owned_by": "anthropic",
-            "context_length": metadata["context_length"],
-            "max_tokens": metadata["max_tokens"],
-            "max_output_tokens": metadata["max_tokens"],  # Some clients look for this field
-            "capabilities": metadata["capabilities"]
-        }
-        model_list.append(model_info)
-
-    return {
-        "object": "list",
-        "data": model_list
-    }
 
 
 class ProxyServer:
     """Proxy server wrapper for CLI control"""
 
-    def __init__(self):
+    def __init__(self, debug: bool = False, debug_sse: bool = False):
         self.server = None
         self.config = None
+        self.debug = debug
+        self.debug_sse = debug_sse
+
+        # Configure debug logging if enabled
+        if debug:
+            self._setup_debug_logging()
+
+    def _setup_debug_logging(self):
+        """Setup debug logging for the proxy server"""
+        import os
+
+        # Get root logger and configure it for debug
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+
+        # Clear existing handlers to avoid duplicates
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+
+        # Create file handler for debug log
+        log_file = os.path.abspath('proxy_debug.log')
+        file_handler = logging.FileHandler(log_file, mode='w')  # 'w' to overwrite each time
+        file_handler.setLevel(logging.DEBUG)
+
+        # Create console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+
+        # Add handlers to root logger
+        root_logger.addHandler(file_handler)
+        root_logger.addHandler(console_handler)
+
+        logger.info(f"Debug logging enabled - writing to {log_file}")
 
     def run(self):
         """Run the proxy server (blocking)"""
@@ -364,7 +399,7 @@ class ProxyServer:
 
 if __name__ == "__main__":
     # If run directly, just start the server (for backward compatibility)
-    logger.info(f"Starting CCMax Proxy on http://127.0.0.1:{PORT}")
+    logger.info(f"Starting Anthropic Claude Max Proxy on http://127.0.0.1:{PORT}")
     logger.info("Note: Use 'python cli.py' for the interactive CLI interface")
 
     uvicorn.run(

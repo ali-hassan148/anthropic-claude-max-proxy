@@ -1,6 +1,9 @@
 import asyncio
+import sys
 import threading
 import time
+import logging
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -21,13 +24,25 @@ console = Console()
 class AnthropicProxyCLI:
     """Main CLI interface for Anthropic Claude Max Proxy"""
 
-    def __init__(self):
+    def __init__(self, debug: bool = False, debug_sse: bool = False):
         self.storage = TokenStorage()
         self.oauth = OAuthManager()
         self.auth_flow = CLIAuthFlow()
-        self.proxy_server = ProxyServer()
+        self.proxy_server = ProxyServer(
+            debug=debug,
+            debug_sse=debug_sse
+        )
         self.server_thread: Optional[threading.Thread] = None
         self.server_running = False
+        self.debug = debug
+        self.debug_sse = debug_sse
+
+        # Debug mode notification
+        if debug:
+            console.print("[yellow]Debug mode enabled - verbose logging will be written to proxy_debug.log[/yellow]")
+        if debug_sse:
+            console.print("[yellow]SSE debug mode enabled - detailed streaming events will be logged[/yellow]")
+
         # Create a single event loop for the CLI session
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -155,9 +170,10 @@ class AnthropicProxyCLI:
             time.sleep(1)
 
             console.print("[green][OK][/green] Proxy running at http://127.0.0.1:8081")
-            console.print("\nYou can now configure your OpenAI-compatible clients:")
-            console.print("  Base URL: http://127.0.0.1:8081/v1")
-            console.print("  API Key: any-placeholder-string")
+            console.print("\nBase URL: http://127.0.0.1:8081")
+            console.print("API Key: any-placeholder-string")
+            console.print("Endpoint: /v1/messages")
+
             console.print("\nPress Enter to continue...")
             input()
 
@@ -270,8 +286,17 @@ class AnthropicProxyCLI:
 
 def main():
     """Entry point for the CLI"""
+    parser = argparse.ArgumentParser(description="Anthropic Claude Max Proxy CLI")
+    parser.add_argument("--debug", "-d", action="store_true", help="Enable debug logging")
+    parser.add_argument("--debug-sse", action="store_true", help="Enable detailed SSE event logging")
+
+    args = parser.parse_args()
+
     try:
-        cli = AnthropicProxyCLI()
+        cli = AnthropicProxyCLI(
+            debug=args.debug,
+            debug_sse=args.debug_sse
+        )
         cli.run()
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user[/yellow]")
