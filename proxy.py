@@ -115,6 +115,19 @@ def sanitize_anthropic_request(request_data: Dict[str, Any]) -> Dict[str, Any]:
             logger.debug(f"Removing invalid top_k value (must be positive): {top_k_val}")
             del sanitized['top_k']
 
+    # Handle tools parameter - remove if null or empty list
+    if 'tools' in sanitized:
+        tools_val = sanitized.get('tools')
+        if tools_val is None:
+            logger.debug("Removing null tools parameter (Anthropic API doesn't accept null values)")
+            del sanitized['tools']
+        elif isinstance(tools_val, list) and len(tools_val) == 0:
+            logger.debug("Removing empty tools list (Anthropic API doesn't accept empty tools list)")
+            del sanitized['tools']
+        elif not isinstance(tools_val, list):
+            logger.debug(f"Removing invalid tools parameter (must be a list): {type(tools_val)}")
+            del sanitized['tools']
+
     # Handle thinking parameter - remove if null/None as Anthropic API doesn't accept null values
     thinking = sanitized.get('thinking')
     if thinking is None:
