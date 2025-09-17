@@ -46,6 +46,7 @@ class AnthropicMessageRequest(BaseModel):
     system: Optional[List[Dict[str, Any]]] = None
     stream: Optional[bool] = False
     thinking: Optional[ThinkingParameter] = None
+    tools: Optional[List[Dict[str, Any]]] = None
 
 
 # Thinking variant parsing removed - clients send thinking parameters directly
