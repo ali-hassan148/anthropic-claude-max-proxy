@@ -51,13 +51,27 @@ class AnthropicMessageRequest(BaseModel):
 # Thinking variant parsing removed - clients send thinking parameters directly
 
 
-def log_request(request_id: str, request_data: Dict[str, Any], endpoint: str):
-    """Log incoming request details"""
+def log_request(request_id: str, request_data: Dict[str, Any], endpoint: str, headers: Optional[Dict[str, str]] = None):
+    """Log incoming request details including headers"""
     logger.debug(f"[{request_id}] RAW REQUEST CAPTURE")
     logger.debug(f"[{request_id}] Endpoint: {endpoint}")
     logger.debug(f"[{request_id}] Model: {request_data.get('model', 'unknown')}")
     logger.debug(f"[{request_id}] Stream: {request_data.get('stream', False)}")
     logger.debug(f"[{request_id}] Max Tokens: {request_data.get('max_tokens', 'unknown')}")
+
+    # Log incoming headers
+    if headers:
+        logger.debug(f"[{request_id}] ===== INCOMING HEADERS FROM CLIENT =====")
+        for header_name, header_value in headers.items():
+            # Redact sensitive headers
+            if header_name.lower() in ['authorization', 'x-api-key', 'api-key']:
+                logger.debug(f"[{request_id}] {header_name}: [REDACTED]")
+            else:
+                logger.debug(f"[{request_id}] {header_name}: {header_value}")
+        
+        # Specifically check for anthropic-beta header
+        if 'anthropic-beta' in headers:
+            logger.debug(f"[{request_id}] *** ANTHROPIC-BETA HEADER FOUND: {headers['anthropic-beta']} ***")
 
     # Log thinking parameters
     thinking = request_data.get('thinking')
@@ -161,8 +175,21 @@ def inject_claude_code_system_message(request_data: Dict[str, Any]) -> Dict[str,
     return modified_request
 
 
-async def make_anthropic_request(anthropic_request: Dict[str, Any], access_token: str) -> httpx.Response:
+async def make_anthropic_request(anthropic_request: Dict[str, Any], access_token: str, client_beta_headers: Optional[str] = None) -> httpx.Response:
     """Make a request to Anthropic API"""
+    # Required beta headers for authentication flow
+    required_betas = ["claude-code-20250219", "oauth-2025-04-20", "fine-grained-tool-streaming-2025-05-14"]
+    
+    # Merge client beta headers if provided
+    if client_beta_headers:
+        client_betas = [beta.strip() for beta in client_beta_headers.split(",")]
+        # Combine and deduplicate
+        all_betas = list(dict.fromkeys(required_betas + client_betas))
+    else:
+        all_betas = required_betas
+    
+    beta_header_value = ",".join(all_betas)
+    
     async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages?beta=true",
@@ -184,7 +211,7 @@ async def make_anthropic_request(anthropic_request: Dict[str, Any], access_token
                 "x-app": "cli",
                 "User-Agent": "claude-cli/1.0.113 (external, cli)",
                 "content-type": "application/json",
-                "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14",
+                "anthropic-beta": beta_header_value,
                 "x-stainless-helper-method": "stream",
                 "accept-language": "*",
                 "sec-fetch-mode": "cors"
@@ -193,8 +220,21 @@ async def make_anthropic_request(anthropic_request: Dict[str, Any], access_token
         return response
 
 
-async def stream_anthropic_response(request_id: str, anthropic_request: Dict[str, Any], access_token: str) -> AsyncIterator[str]:
+async def stream_anthropic_response(request_id: str, anthropic_request: Dict[str, Any], access_token: str, client_beta_headers: Optional[str] = None) -> AsyncIterator[str]:
     """Stream response from Anthropic API"""
+    # Required beta headers for authentication flow
+    required_betas = ["claude-code-20250219", "oauth-2025-04-20", "fine-grained-tool-streaming-2025-05-14"]
+    
+    # Merge client beta headers if provided
+    if client_beta_headers:
+        client_betas = [beta.strip() for beta in client_beta_headers.split(",")]
+        # Combine and deduplicate
+        all_betas = list(dict.fromkeys(required_betas + client_betas))
+    else:
+        all_betas = required_betas
+    
+    beta_header_value = ",".join(all_betas)
+    
     async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
         async with client.stream(
             "POST",
@@ -217,18 +257,24 @@ async def stream_anthropic_response(request_id: str, anthropic_request: Dict[str
                 "x-app": "cli",
                 "User-Agent": "claude-cli/1.0.113 (external, cli)",
                 "content-type": "application/json",
-                "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14",
+                "anthropic-beta": beta_header_value,
                 "x-stainless-helper-method": "stream",
                 "accept-language": "*",
                 "sec-fetch-mode": "cors"
             }
         ) as response:
             if response.status_code != 200:
+                # For error responses, stream them back as SSE events
                 error_text = await response.aread()
-                error_msg = f"Anthropic API error {response.status_code}: {error_text.decode()}"
-                logger.error(f"[{request_id}] {error_msg}")
-                raise HTTPException(status_code=response.status_code, detail={"error": {"message": error_msg}})
+                error_json = error_text.decode()
+                logger.error(f"[{request_id}] Anthropic API error {response.status_code}: {error_json}")
+                
+                # Format error as SSE event for proper client handling
+                error_event = f"event: error\ndata: {error_json}\n\n"
+                yield error_event
+                return
 
+            # Stream successful response chunks
             async for chunk in response.aiter_text():
                 yield chunk
 
@@ -260,13 +306,16 @@ async def auth_status():
 
 
 @app.post("/v1/messages")
-async def anthropic_messages(request: AnthropicMessageRequest):
+async def anthropic_messages(request: AnthropicMessageRequest, raw_request: Request):
     """Native Anthropic messages endpoint"""
     request_id = str(uuid.uuid4())[:8]
     start_time = time.time()
 
+    # Capture raw request headers
+    headers_dict = dict(raw_request.headers)
+
     logger.info(f"[{request_id}] ===== NEW ANTHROPIC MESSAGES REQUEST =====")
-    log_request(request_id, request.model_dump(), "/v1/messages")
+    log_request(request_id, request.model_dump(), "/v1/messages", headers_dict)
 
     # Get valid access token with automatic refresh
     access_token = await oauth_manager.get_valid_token_async()
@@ -295,8 +344,19 @@ async def anthropic_messages(request: AnthropicMessageRequest):
 
     # Inject Claude Code system message to bypass authentication detection
     anthropic_request = inject_claude_code_system_message(anthropic_request)
+    
+    # Extract client beta headers
+    client_beta_headers = headers_dict.get("anthropic-beta")
 
-    logger.debug(f"[{request_id}] FINAL ANTHROPIC REQUEST HEADERS: authorization=Bearer *****, anthropic-beta=claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14, User-Agent=Claude-Code/1.0.0")
+    # Log the final beta headers that will be sent
+    required_betas = ["claude-code-20250219", "oauth-2025-04-20", "fine-grained-tool-streaming-2025-05-14"]
+    if client_beta_headers:
+        client_betas = [beta.strip() for beta in client_beta_headers.split(",")]
+        all_betas = list(dict.fromkeys(required_betas + client_betas))
+    else:
+        all_betas = required_betas
+    
+    logger.debug(f"[{request_id}] FINAL ANTHROPIC REQUEST HEADERS: authorization=Bearer *****, anthropic-beta={','.join(all_betas)}, User-Agent=Claude-Code/1.0.0")
     logger.debug(f"[{request_id}] SYSTEM MESSAGE STRUCTURE: {json.dumps(anthropic_request.get('system', []), indent=2)}")
     logger.debug(f"[{request_id}] FULL REQUEST COMPARISON - Our request structure:")
     logger.debug(f"[{request_id}] - model: {anthropic_request.get('model')}")
@@ -311,23 +371,30 @@ async def anthropic_messages(request: AnthropicMessageRequest):
             # Handle streaming response
             logger.debug(f"[{request_id}] Initiating streaming request")
             return StreamingResponse(
-                stream_anthropic_response(request_id, anthropic_request, access_token),
+                stream_anthropic_response(request_id, anthropic_request, access_token, client_beta_headers),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
             )
         else:
             # Handle non-streaming response
             logger.debug(f"[{request_id}] Making non-streaming request")
-            response = await make_anthropic_request(anthropic_request, access_token)
+            response = await make_anthropic_request(anthropic_request, access_token, client_beta_headers)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.info(f"[{request_id}] Anthropic request completed in {elapsed_ms}ms status={response.status_code}")
 
             if response.status_code != 200:
-                error_text = response.text
-                error_msg = f"Anthropic API error {response.status_code}: {error_text}"
-                logger.error(f"[{request_id}] {error_msg}")
-                raise HTTPException(status_code=response.status_code, detail={"error": {"message": error_text}})
+                # Return the exact error from Anthropic API
+                try:
+                    error_json = response.json()
+                except:
+                    # If not JSON, return raw text
+                    error_json = {"error": {"type": "api_error", "message": response.text}}
+                
+                logger.error(f"[{request_id}] Anthropic API error {response.status_code}: {json.dumps(error_json)}")
+                
+                # FastAPI will automatically set the status code and return this as JSON
+                raise HTTPException(status_code=response.status_code, detail=error_json)
 
             # Return Anthropic response as-is (native format)
             anthropic_response = response.json()
