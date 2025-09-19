@@ -75,6 +75,13 @@ Configure your Anthropic API client:
 
 - Supports all Anthropic Models that you have access to with your Claude Pro / Max subscription.
 
+## Tested & Supported features
+
+- Browser use
+- Images
+
+these are features that are not available or not user friendly in CC.
+
 ## Configuration Priority
 
 1. Environment variables (highest)
