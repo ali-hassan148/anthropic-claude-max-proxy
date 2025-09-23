@@ -8,7 +8,7 @@
     "default": "claude-sonnet-4-0"
   },
   "api": {
-    "request_timeout": 120
+    "request_timeout": 600
   },
   "storage": {
     "token_file": "~/.anthropic-claude-max-proxy/tokens.json"

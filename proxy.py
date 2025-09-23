@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from settings import (
-    PORT, LOG_LEVEL, THINKING_FORCE_ENABLED, THINKING_DEFAULT_BUDGET, BIND_ADDRESS
+    PORT, LOG_LEVEL, THINKING_FORCE_ENABLED, THINKING_DEFAULT_BUDGET, BIND_ADDRESS, REQUEST_TIMEOUT
 )
 from oauth import OAuthManager
 from storage import TokenStorage
@@ -69,7 +69,7 @@ def log_request(request_id: str, request_data: Dict[str, Any], endpoint: str, he
                 logger.debug(f"[{request_id}] {header_name}: [REDACTED]")
             else:
                 logger.debug(f"[{request_id}] {header_name}: {header_value}")
-        
+
         # Specifically check for anthropic-beta header
         if 'anthropic-beta' in headers:
             logger.debug(f"[{request_id}] *** ANTHROPIC-BETA HEADER FOUND: {headers['anthropic-beta']} ***")
@@ -193,7 +193,7 @@ async def make_anthropic_request(anthropic_request: Dict[str, Any], access_token
     """Make a request to Anthropic API"""
     # Required beta headers for authentication flow
     required_betas = ["claude-code-20250219", "oauth-2025-04-20", "fine-grained-tool-streaming-2025-05-14"]
-    
+
     # Merge client beta headers if provided
     if client_beta_headers:
         client_betas = [beta.strip() for beta in client_beta_headers.split(",")]
@@ -201,10 +201,10 @@ async def make_anthropic_request(anthropic_request: Dict[str, Any], access_token
         all_betas = list(dict.fromkeys(required_betas + client_betas))
     else:
         all_betas = required_betas
-    
+
     beta_header_value = ",".join(all_betas)
-    
-    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=30.0)) as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages?beta=true",
             json=anthropic_request,
@@ -238,7 +238,7 @@ async def stream_anthropic_response(request_id: str, anthropic_request: Dict[str
     """Stream response from Anthropic API"""
     # Required beta headers for authentication flow
     required_betas = ["claude-code-20250219", "oauth-2025-04-20", "fine-grained-tool-streaming-2025-05-14"]
-    
+
     # Merge client beta headers if provided
     if client_beta_headers:
         client_betas = [beta.strip() for beta in client_beta_headers.split(",")]
@@ -246,10 +246,10 @@ async def stream_anthropic_response(request_id: str, anthropic_request: Dict[str
         all_betas = list(dict.fromkeys(required_betas + client_betas))
     else:
         all_betas = required_betas
-    
+
     beta_header_value = ",".join(all_betas)
-    
-    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=30.0)) as client:
         async with client.stream(
             "POST",
             "https://api.anthropic.com/v1/messages?beta=true",
@@ -282,15 +282,22 @@ async def stream_anthropic_response(request_id: str, anthropic_request: Dict[str
                 error_text = await response.aread()
                 error_json = error_text.decode()
                 logger.error(f"[{request_id}] Anthropic API error {response.status_code}: {error_json}")
-                
+
                 # Format error as SSE event for proper client handling
                 error_event = f"event: error\ndata: {error_json}\n\n"
                 yield error_event
                 return
 
             # Stream successful response chunks
-            async for chunk in response.aiter_text():
-                yield chunk
+            try:
+                async for chunk in response.aiter_text():
+                    yield chunk
+            except httpx.ReadTimeout:
+                error_event = f"event: error\ndata: {{\"error\": \"Stream timeout after {REQUEST_TIMEOUT}s\"}}\n\n"
+                yield error_event
+            except httpx.RemoteProtocolError as e:
+                error_event = f"event: error\ndata: {{\"error\": \"Connection closed: {str(e)}\"}}\n\n"
+                yield error_event
 
 
 # Middleware for request logging
@@ -358,7 +365,7 @@ async def anthropic_messages(request: AnthropicMessageRequest, raw_request: Requ
 
     # Inject Claude Code system message to bypass authentication detection
     anthropic_request = inject_claude_code_system_message(anthropic_request)
-    
+
     # Extract client beta headers
     client_beta_headers = headers_dict.get("anthropic-beta")
 
@@ -369,7 +376,7 @@ async def anthropic_messages(request: AnthropicMessageRequest, raw_request: Requ
         all_betas = list(dict.fromkeys(required_betas + client_betas))
     else:
         all_betas = required_betas
-    
+
     logger.debug(f"[{request_id}] FINAL ANTHROPIC REQUEST HEADERS: authorization=Bearer *****, anthropic-beta={','.join(all_betas)}, User-Agent=Claude-Code/1.0.0")
     logger.debug(f"[{request_id}] SYSTEM MESSAGE STRUCTURE: {json.dumps(anthropic_request.get('system', []), indent=2)}")
     logger.debug(f"[{request_id}] FULL REQUEST COMPARISON - Our request structure:")
@@ -404,9 +411,9 @@ async def anthropic_messages(request: AnthropicMessageRequest, raw_request: Requ
                 except:
                     # If not JSON, return raw text
                     error_json = {"error": {"type": "api_error", "message": response.text}}
-                
+
                 logger.error(f"[{request_id}] Anthropic API error {response.status_code}: {json.dumps(error_json)}")
-                
+
                 # FastAPI will automatically set the status code and return this as JSON
                 raise HTTPException(status_code=response.status_code, detail=error_json)
 
