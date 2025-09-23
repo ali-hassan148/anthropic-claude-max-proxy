@@ -4,6 +4,7 @@ import threading
 import time
 import logging
 import argparse
+import __main__
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -19,12 +20,14 @@ from storage import TokenStorage
 from oauth import OAuthManager
 from auth_cli import CLIAuthFlow
 from proxy import ProxyServer
+from debug_console import create_debug_console
 
+# Global console - will be configured based on debug mode
 console = Console()
 
 class AnthropicProxyCLI:
     """Main CLI interface for Anthropic Claude Max Proxy"""
-    
+
     MAX_RETRIES = 3  # Maximum number of retry attempts for network errors
 
     def __init__(self, debug: bool = False, debug_sse: bool = False, bind_address: str = None):
@@ -42,6 +45,9 @@ class AnthropicProxyCLI:
         self.debug_sse = debug_sse
         self.bind_address = bind_address or self.proxy_server.bind_address
 
+        # Configure debug console if debug mode is enabled
+        self._setup_debug_console()
+
         # Debug mode notification
         if debug:
             console.print("[yellow]Debug mode enabled - verbose logging will be written to proxy_debug.log[/yellow]")
@@ -51,6 +57,22 @@ class AnthropicProxyCLI:
         # Create a single event loop for the CLI session
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+
+    def _setup_debug_console(self):
+        """Setup debug console based on debug mode"""
+        global console
+
+        if self.debug:
+            # Check if proxy has set up debug logging
+            debug_logger = getattr(__main__, '_proxy_debug_logger', None) if hasattr(__main__, '_proxy_debug_logger') else None
+
+            if debug_logger:
+                # Replace global console with debug capturing console
+                console = create_debug_console(debug_enabled=True, debug_logger=debug_logger)
+                # Log CLI session start
+                debug_logger.debug("[CLI] ===== CLI SESSION STARTED =====")
+                debug_logger.debug(f"[CLI] Debug mode: {self.debug}, SSE debug: {self.debug_sse}")
+                debug_logger.debug(f"[CLI] Bind address: {self.bind_address}")
 
     def clear_screen(self):
         """Clear the terminal screen"""
@@ -92,7 +114,7 @@ class AnthropicProxyCLI:
             return "VALID", f"Expires in {time_str}"
 
         return "UNKNOWN", "Unable to determine status"
-    
+
     def check_and_refresh_auth(self) -> tuple[bool, str, str]:
         """
         Check authentication status and attempt refresh if needed
@@ -100,27 +122,27 @@ class AnthropicProxyCLI:
         """
         # Get the current token status
         status = self.storage.get_status()
-        
+
         # No tokens at all
         if not status["has_tokens"]:
             return False, "NO_AUTH", "No authentication tokens found. Please login first (option 2)"
-        
+
         # Token is still valid
         if not status["is_expired"]:
             return True, "VALID", f"Token valid for: {status['time_until_expiry']}"
-        
+
         # Token is expired - check for refresh token
         refresh_token = self.storage.get_refresh_token()
         if not refresh_token:
             return False, "NO_REFRESH", "Token expired and no refresh token available. Please login again (option 2)"
-        
+
         # Attempt to refresh the token
         console.print("[yellow]Token expired, attempting automatic refresh...[/yellow]")
-        
+
         try:
             # Run the async refresh_tokens method using the event loop
             success = self.loop.run_until_complete(self.oauth.refresh_tokens())
-            
+
             if success:
                 # Get updated status after refresh
                 new_status = self.storage.get_status()
@@ -129,10 +151,10 @@ class AnthropicProxyCLI:
             else:
                 # Refresh failed but we don't know why (generic failure)
                 return False, "REFRESH_FAILED", "Refresh token invalid or expired. Please login again (option 2)"
-        
+
         except httpx.NetworkError:
             return False, "NETWORK_ERROR", "Network error during token refresh. Check connection and retry"
-        
+
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (401, 403):
                 return False, "INVALID_TOKEN", "Refresh token invalid or expired. Please login again (option 2)"
@@ -140,7 +162,7 @@ class AnthropicProxyCLI:
                 return False, "SERVER_ERROR", f"Server error during token refresh (HTTP {e.response.status_code}). Try again later"
             else:
                 return False, "HTTP_ERROR", f"Token refresh failed (HTTP {e.response.status_code}). Please login (option 2)"
-        
+
         except Exception as e:
             # Unknown error
             return False, "UNKNOWN_ERROR", f"Token refresh failed: {str(e)}. Please login (option 2)"
@@ -202,20 +224,27 @@ class AnthropicProxyCLI:
 
     def start_proxy_server(self, retry_count: int = 0):
         """Start the proxy server in a background thread
-        
+
         Args:
             retry_count: Number of retry attempts made so far (used internally)
         """
+        if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+            __main__._proxy_debug_logger.debug(f"[CLI] Starting proxy server (retry_count: {retry_count})")
+
         if self.server_running:
             console.print("[yellow]Server is already running[/yellow]")
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[CLI] Server already running, skipping start")
             return
 
         # Check authentication with automatic refresh
         auth_ok, auth_status, message = self.check_and_refresh_auth()
-        
+
         if not auth_ok:
             console.print(f"[red]ERROR:[/red] {message}")
-            
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[CLI] Server start failed - auth issue: {auth_status} - {message}")
+
             # For network errors, offer retry option
             if auth_status == "NETWORK_ERROR":
                 if retry_count < self.MAX_RETRIES:
@@ -224,7 +253,7 @@ class AnthropicProxyCLI:
                     console.print("1. Retry token refresh")
                     console.print("2. Return to main menu")
                     choice = Prompt.ask("Select option", choices=["1", "2"])
-                    
+
                     if choice == "1":
                         # Retry the refresh with incremented counter
                         self.start_proxy_server(retry_count + 1)
@@ -233,11 +262,11 @@ class AnthropicProxyCLI:
                     # Max retries reached
                     console.print(f"\n[red]Maximum retry attempts ({self.MAX_RETRIES}) reached.[/red]")
                     console.print("Please check your network connection and try again later.")
-            
+
             console.print("\nPress Enter to continue...")
             input()
             return
-        
+
         # Show success message if token was refreshed
         if auth_status == "REFRESHED":
             console.print(f"[green]{message}[/green]")
@@ -258,19 +287,29 @@ class AnthropicProxyCLI:
             console.print("API Key: any-placeholder-string")
             console.print("Endpoint: /v1/messages")
 
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[CLI] Proxy server started successfully at {self.bind_address}:8081")
+
             console.print("\nPress Enter to continue...")
             input()
 
         except Exception as e:
             console.print(f"[red]ERROR:[/red] Failed to start server: {e}")
             self.server_running = False
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[CLI] Failed to start server: {e}")
             console.print("\nPress Enter to continue...")
             input()
 
     def stop_proxy_server(self):
         """Stop the proxy server"""
+        if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+            __main__._proxy_debug_logger.debug("[CLI] Stopping proxy server")
+
         if not self.server_running:
             console.print("[yellow]Server is not running[/yellow]")
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[CLI] Server not running, skipping stop")
             return
 
         console.print("Stopping proxy server...")
@@ -279,9 +318,13 @@ class AnthropicProxyCLI:
             self.proxy_server.stop()
             self.server_running = False
             console.print("[green][OK][/green] Server stopped")
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[CLI] Proxy server stopped successfully")
 
         except Exception as e:
             console.print(f"[red]ERROR:[/red] Failed to stop server: {e}")
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[CLI] Failed to stop server: {e}")
 
         console.print("\nPress Enter to continue...")
         input()
@@ -291,16 +334,26 @@ class AnthropicProxyCLI:
         console.print("Starting OAuth login flow...")
 
         try:
+            # Log authentication attempt
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[CLI] Starting authentication flow")
+
             # Use the event loop to run the async authenticate method
             success = self.loop.run_until_complete(self.auth_flow.authenticate())
 
             if success:
                 console.print("[green]Authentication successful![/green]")
+                if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[CLI] Authentication successful")
             else:
                 console.print("[red]Authentication failed[/red]")
+                if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[CLI] Authentication failed")
 
         except Exception as e:
             console.print(f"[red]ERROR:[/red] {e}")
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[CLI] Authentication error: {e}")
 
         console.print("\nPress Enter to continue...")
         input()
@@ -309,9 +362,14 @@ class AnthropicProxyCLI:
         """Attempt to refresh the access token"""
         console.print("Attempting to refresh token...")
 
+        if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+            __main__._proxy_debug_logger.debug("[CLI] Manual token refresh requested")
+
         # Check if we have a refresh token first
         if not self.storage.get_refresh_token():
             console.print("[red]No refresh token available - please login first[/red]")
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[CLI] No refresh token available for manual refresh")
             console.print("\nPress Enter to continue...")
             input()
             return
@@ -324,27 +382,44 @@ class AnthropicProxyCLI:
                 # Show updated token status
                 auth_status, auth_detail = self.get_auth_status()
                 console.print(f"Status: [{('green' if auth_status == 'VALID' else 'yellow')}]{auth_status}[/] ({auth_detail})")
+                if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug(f"[CLI] Manual token refresh successful - {auth_status}: {auth_detail}")
             else:
                 console.print("[red]Token refresh failed - please login again[/red]")
                 console.print("This usually happens when the refresh token has expired.")
+                if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[CLI] Manual token refresh failed")
 
         except Exception as e:
             console.print(f"[red]ERROR:[/red] Token refresh failed: {e}")
             console.print("Please try logging in again (option 2)")
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[CLI] Manual token refresh error: {e}")
 
         console.print("\nPress Enter to continue...")
         input()
 
     def logout(self):
         """Clear stored tokens"""
+        if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+            __main__._proxy_debug_logger.debug("[CLI] Logout confirmation requested")
+
         if Confirm.ask("Are you sure you want to clear all tokens?"):
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[CLI] User confirmed logout")
             try:
                 self.storage.clear_tokens()
                 console.print("[green]Tokens cleared successfully[/green]")
+                if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[CLI] Tokens cleared successfully")
             except Exception as e:
                 console.print(f"[red]ERROR:[/red] {e}")
+                if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug(f"[CLI] Logout error: {e}")
         else:
             console.print("Logout cancelled")
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[CLI] User cancelled logout")
 
         console.print("\nPress Enter to continue...")
         input()
@@ -357,6 +432,10 @@ class AnthropicProxyCLI:
             self.display_menu()
 
             choice = Prompt.ask("Select option [1-6]", choices=["1", "2", "3", "4", "5", "6"])
+
+            # Log user menu choice for debugging
+            if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[CLI] User selected menu option: {choice}")
 
             if choice == "1":
                 if self.server_running:
@@ -375,6 +454,9 @@ class AnthropicProxyCLI:
                 if self.server_running:
                     console.print("Stopping server before exit...")
                     self.stop_proxy_server()
+                # Log session end for debugging
+                if self.debug and hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[CLI] ===== CLI SESSION ENDED =====")
                 # Clean up the event loop
                 self.loop.close()
                 console.print("Goodbye!")

@@ -1,11 +1,14 @@
 import webbrowser
+import __main__
 from typing import Optional
 from rich.console import Console
 from rich.prompt import Prompt
 
 from oauth import OAuthManager
 from storage import TokenStorage
+from debug_console import create_debug_console
 
+# Console will be configured based on debug mode
 console = Console()
 
 class CLIAuthFlow:
@@ -14,23 +17,46 @@ class CLIAuthFlow:
     def __init__(self):
         self.oauth = OAuthManager()
         self.storage = TokenStorage()
+        self._setup_debug_console()
+
+    def _setup_debug_console(self):
+        """Setup debug console if debug mode is enabled"""
+        global console
+
+        # Check if debug mode is enabled via the main module
+        if hasattr(__main__, '_proxy_debug_enabled') and __main__._proxy_debug_enabled:
+            debug_logger = getattr(__main__, '_proxy_debug_logger', None)
+            if debug_logger:
+                console = create_debug_console(debug_enabled=True, debug_logger=debug_logger)
+                debug_logger.debug("[AUTH] ===== AUTH CLI INITIALIZED =====")
 
     async def authenticate(self) -> bool:
         """
         Run the OAuth authentication flow
         Returns True if successful, False otherwise
         """
+        # Log authentication start
+        if hasattr(__main__, '_proxy_debug_logger'):
+            __main__._proxy_debug_logger.debug("[AUTH] Starting authentication flow")
+
         try:
             # Step 1: Generate auth URL and open browser
             console.print("\n[bold]Step 1:[/bold] Opening browser for authentication...")
             auth_url = self.oauth.get_authorize_url()
 
+            if hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[AUTH] Generated auth URL: {auth_url[:50]}...")
+
             # Try to open browser
             if webbrowser.open(auth_url):
                 console.print("[green][OK][/green] Browser opened successfully")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[AUTH] Browser opened successfully")
             else:
                 console.print("[yellow]Could not open browser automatically[/yellow]")
                 console.print(f"Please open this URL manually:\n{auth_url}")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[AUTH] Could not open browser automatically")
 
             # Step 2: Instructions
             console.print("\n[bold]Step 2:[/bold] Complete the login process in your browser")
@@ -42,40 +68,61 @@ class CLIAuthFlow:
             console.print("\n[bold]Step 3:[/bold] Paste the authorization code below")
             console.print("[dim]The code should look like: CODE#STATE[/dim]\n")
 
+            if hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[AUTH] Waiting for user to enter authorization code")
+
             # Use simple input to avoid event loop conflicts
             try:
                 code = input("Authorization code: ")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug(f"[AUTH] User entered code (length: {len(code.strip()) if code else 0})")
             except KeyboardInterrupt:
                 console.print("\n[yellow]Authentication cancelled by user[/yellow]")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[AUTH] Authentication cancelled by user (KeyboardInterrupt)")
                 return False
 
             if not code or len(code.strip()) < 10:
                 console.print("[red]Invalid or missing code. Please paste the complete code from the browser.[/red]")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[AUTH] Invalid or missing authorization code")
                 return False
 
             # Step 4: Exchange code for tokens
             console.print("\n[bold]Step 4:[/bold] Exchanging code for tokens...")
+            if hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[AUTH] Exchanging authorization code for tokens")
 
             result = await self.oauth.exchange_code(code.strip())
 
             if result and result.get("status") == "success":
                 console.print("[green][OK][/green] Tokens obtained successfully")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[AUTH] Tokens obtained successfully")
 
                 # Show token status
                 status = self.storage.get_status()
                 if status["expires_at"]:
                     console.print(f"Token expires at: {status['expires_at']}")
+                    if hasattr(__main__, '_proxy_debug_logger'):
+                        __main__._proxy_debug_logger.debug(f"[AUTH] Token expires at: {status['expires_at']}")
 
                 return True
             else:
                 console.print("[red][ERROR][/red] Failed to exchange code for tokens")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug(f"[AUTH] Failed to exchange code for tokens: {result}")
                 return False
 
         except Exception as e:
             console.print(f"[red][ERROR][/red] Authentication failed: {e}")
+            if hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[AUTH] Authentication failed with exception: {e}")
 
             # Offer retry
             retry = Prompt.ask("\nWould you like to try again?", choices=["y", "n"], default="n")
+            if hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[AUTH] User retry choice: {retry}")
             if retry.lower() == "y":
                 return await self.authenticate()
 
@@ -88,23 +135,33 @@ class CLIAuthFlow:
         """
         try:
             console.print("Refreshing access token...")
+            if hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug("[AUTH] Attempting to refresh access token")
 
             success = await self.oauth.refresh_tokens()
 
             if success:
                 console.print("[green][OK][/green] Token refreshed successfully")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[AUTH] Token refreshed successfully")
 
                 # Show new expiry
                 status = self.storage.get_status()
                 if status["expires_at"]:
                     console.print(f"New expiry: {status['expires_at']}")
+                    if hasattr(__main__, '_proxy_debug_logger'):
+                        __main__._proxy_debug_logger.debug(f"[AUTH] New token expiry: {status['expires_at']}")
 
                 return True
             else:
                 console.print("[red][ERROR][/red] Token refresh failed")
                 console.print("You may need to login again")
+                if hasattr(__main__, '_proxy_debug_logger'):
+                    __main__._proxy_debug_logger.debug("[AUTH] Token refresh failed")
                 return False
 
         except Exception as e:
             console.print(f"[red][ERROR][/red] Refresh failed: {e}")
+            if hasattr(__main__, '_proxy_debug_logger'):
+                __main__._proxy_debug_logger.debug(f"[AUTH] Token refresh failed with exception: {e}")
             return False

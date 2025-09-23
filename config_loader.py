@@ -7,9 +7,13 @@ Loads configuration from multiple sources with the following priority:
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Set up logger for config loader
+logger = logging.getLogger(__name__)
 
 
 class ConfigLoader:
@@ -32,7 +36,7 @@ class ConfigLoader:
                 with open(self.config_path, 'r') as f:
                     return json.load(f)
             except (json.JSONDecodeError, IOError) as e:
-                print(f"Warning: Failed to load {self.config_path}: {e}")
+                logger.warning(f"Failed to load {self.config_path}: {e}")
                 return {}
         return {}
 

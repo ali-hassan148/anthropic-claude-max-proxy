@@ -450,6 +450,7 @@ class ProxyServer:
     def _setup_debug_logging(self):
         """Setup debug logging for the proxy server"""
         import os
+        from debug_console import setup_debug_logger
 
         # Get root logger and configure it for debug
         root_logger = logging.getLogger()
@@ -459,9 +460,9 @@ class ProxyServer:
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
 
-        # Create file handler for debug log
+        # Create file handler for debug log with append mode
         log_file = os.path.abspath('proxy_debug.log')
-        file_handler = logging.FileHandler(log_file, mode='w')  # 'w' to overwrite each time
+        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')  # 'a' to append
         file_handler.setLevel(logging.DEBUG)
 
         # Create console handler
@@ -477,7 +478,16 @@ class ProxyServer:
         root_logger.addHandler(file_handler)
         root_logger.addHandler(console_handler)
 
-        logger.info(f"Debug logging enabled - writing to {log_file}")
+        # Set up debug console logger for Rich console output capture
+        self.debug_console_logger = setup_debug_logger(log_file)
+
+        # Store debug info globally for CLI access
+        import __main__
+        __main__._proxy_debug_enabled = True
+        __main__._proxy_debug_logger = self.debug_console_logger
+
+        logger.info(f"Debug logging enabled - appending to {log_file}")
+        logger.info("Rich console output will be captured to debug log")
 
     def run(self):
         """Run the proxy server (blocking)"""
